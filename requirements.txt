@@ -1,0 +1,4 @@
+torch
+qtorch # helpers for working with fixed precision
+dpdata # reading datasets
+# Note: QDPi dataset is at: https://zenodo.org/records/14970869
