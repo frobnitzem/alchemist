@@ -73,11 +73,11 @@ class LeapFrog(nn.Module):
         if inverse:
             x['r'] = x['r'] - Q(self.dt*x['p'])
             x['t'] = x['t'] - self.dt
-            F = self.force(x['r'], x['t'])
-            x['p'] = x['p'] - Q(self.dt*F)
+            frc = self.force(x['r'], x['t'])
+            x['p'] = x['p'] - Q(self.dt*frc)
         else:
-            F = self.force(x['r'], x['t'])
-            x['p'] = x['p'] + Q(self.dt*F)
+            frc = self.force(x['r'], x['t'])
+            x['p'] = x['p'] + Q(self.dt*frc)
             x['r'] = x['r'] + Q(self.dt*x['p'])
             x['t'] = x['t'] + self.dt
         if len(x['r'].shape) == 2:
@@ -87,18 +87,15 @@ class LeapFrog(nn.Module):
         return x, torch.zeros(batches)
 
 class MultiStep(nn.Module):
-    def __init__(self, en, n, dt=0.001):
+    def __init__(self, step, n):
         super().__init__()
+        self.step = step
         self.n = n
-        self.dt = dt
-        leap = LeapFrog(en, dt)
 
     def forward(self, x, inverse=False):
-        if 't' not in x:
-            x['t'] = self.n*self.dt if inverse else 0.0
         logJ = 0.0
-        for i in range(10):
-            x, lJ = self.leap(x, inverse=inverse)
+        for i in range(self.n):
+            x, lJ = self.step(x, inverse=inverse)
             logJ += lJ
         return x, logJ
 
@@ -122,16 +119,20 @@ def train(dataset, H0, process, loss_prior, beta=1.0):
     """
     import torch.optim as optim
 
-    #criterion = nn.MSELoss() # Mean Squared Error loss
-    optimizer = optim.SGD(process.parameters(), lr=0.01) # Stochastic Gradient Descent optimizer
+    #for p in process.parameters():
+    #    break
+    optimizer = optim.Adam(process.parameters(), lr=0.01)
 
     for x in dataset:
+        batch_size = len(x['r'])
         process.zero_grad()
         x0, logJ = process(x)
-        loss = loss_prior() + beta*H0(x0) - logJ
-        loss.backward()
-        optimizer.step()
+        loss = loss_prior() + (beta*H0(x0) - logJ)/batch_size
         yield loss.item()
+
+        loss.backward()
+        #print(p.grad) # verified is non-zero, O(1e-5 though)
+        optimizer.step()
 
 def test_diff(dim, t=0.0):
     r = torch.rand((4, dim), requires_grad=True)
@@ -182,7 +183,9 @@ def gen_points(elems, mixt, beta):
     sigma = beta**-0.5
     normal = torch.distributions.normal.Normal(0, sigma)
     for z in elems:
+        #print(z)
         r = mixt(z)
+        #print(r)
         x = {'r': Q(r),
              'p': Q(normal.sample(r.shape)),
              't': 0.0,
@@ -190,8 +193,8 @@ def gen_points(elems, mixt, beta):
         yield x
 
 def H0(x): # Harmonic oscillator H0
-    U = (x['r']*x['r']).sum(-1).sum(-1)
-    T = (x['p']*x['p']).sum(-1).sum(-1)
+    U = (x['r']*x['r']).sum()
+    T = (x['p']*x['p']).sum()
     return 0.5*(U+T)
 
 if __name__=="__main__":
@@ -213,13 +216,20 @@ if __name__=="__main__":
       [ 0.5, 3**0.5/2.0]]
     )
     assert len(mean) == atom_types, "Need new embeddings."
-    M = MixtureNormal(mean, 0.25)
+    M = MixtureNormal(mean, 0.01)
 
-    zdata = MultinomialData(prob)
+    zdata = MultinomialData(prob, batch_size=1024)
     dataset = gen_points(zdata, M, beta)
     en = EnergyNet(mean.shape[1])
-    #process = MultiStep(en, 4, 0.001)
-    process = LeapFrog(en, 0.001)
+
+    leap = LeapFrog(en, 0.01)
+    process = MultiStep(leap, 100)
     T = train(dataset, H0, process, M.loss_prior, beta)
-    for i, l in zip(range(10), T):
-        print(i, l)
+    for i, l in zip(range(2000), T):
+        #if i%10 == 9:
+        #    print(f"Step {i}. Loss = {l}")
+        #    print("Force on embeddings =")
+        #    print(-en.diff(mean, 0.0))
+        frc = -en.diff(mean, 0.0)
+        print(f"{i} {l} {frc[0,0]} {frc[0,1]} {frc[1,0]} {frc[1,1]} {frc[2,0]} {frc[2,1]}")
+
