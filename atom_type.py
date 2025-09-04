@@ -232,4 +232,3 @@ if __name__=="__main__":
         #    print(-en.diff(mean, 0.0))
         frc = -en.diff(mean, 0.0)
         print(f"{i} {l} {frc[0,0]} {frc[0,1]} {frc[1,0]} {frc[1,1]} {frc[2,0]} {frc[2,1]}")
-
