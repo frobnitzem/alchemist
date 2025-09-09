@@ -46,6 +46,12 @@ class EnergyNet(nn.Module):
         return self.fc3(x3)
 
     def diff(self, x, t):
+        x.requires_grad_(True)
+        E = self.forward(x, t)
+        return torch.autograd.grad(E, x,
+                grad_outputs=torch.ones_like(E), create_graph=True)[0]
+
+    def diff1(self, x, t):
         x0 = self.fc1(x)      # B,d1
         x1 = F.softplus(x0)   # B,d1
         x2 = self.fc2(x1)     # B,d2
@@ -59,6 +65,12 @@ class EnergyNet(nn.Module):
         u2 *= F.sigmoid(x0)
         dE = torch.mm(u2, self.fc1.weight) # B,dim
         return dE
+
+    def diff_dot(self, x, t, f):
+        # compute dot(dE/dx, f)
+        _, vjpfunc = torch.func.vjp(self.forward, x, t)
+        vjps = vjpfunc(f)
+        return vjps[0]
 
 class LeapFrog(nn.Module):
     def __init__(self, en, dt=0.001):
@@ -198,6 +210,8 @@ def H0(x): # Harmonic oscillator H0
     return 0.5*(U+T)
 
 if __name__=="__main__":
+    run_tests()
+    exit()
     beta = 1.0
 
     torch.manual_seed(1)
@@ -216,7 +230,9 @@ if __name__=="__main__":
       [ 0.5, 3**0.5/2.0]]
     )
     assert len(mean) == atom_types, "Need new embeddings."
-    M = MixtureNormal(mean, 0.01)
+    M = MixtureNormal(atom_types, 2, 0.01)
+    with torch.no_grad():
+        M.embed.weight[:] = mean
 
     zdata = MultinomialData(prob, batch_size=1024)
     dataset = gen_points(zdata, M, beta)
