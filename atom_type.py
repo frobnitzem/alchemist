@@ -1,4 +1,5 @@
 import torch
+import pytest
 
 # First define number formats used in forward and backward quantization
 from qtorch import FixedPoint, FloatingPoint
@@ -146,6 +147,11 @@ def train(dataset, H0, process, loss_prior, beta=1.0):
         #print(p.grad) # verified is non-zero, O(1e-5 though)
         optimizer.step()
 
+@pytest.mark.parametrize("dim", [
+        (3),
+        (8),
+        (10),
+    ])
 def test_diff(dim, t=0.0):
     r = torch.rand((4, dim), requires_grad=True)
     N = EnergyNet(dim)
@@ -210,8 +216,6 @@ def H0(x): # Harmonic oscillator H0
     return 0.5*(U+T)
 
 if __name__=="__main__":
-    run_tests()
-    exit()
     beta = 1.0
 
     torch.manual_seed(1)

@@ -121,6 +121,3 @@ def test_log_pzh():
 
     print(idx.shape)
     print(M(idx).shape)
-
-if __name__=="__main__":
-    test_log_pzh()
