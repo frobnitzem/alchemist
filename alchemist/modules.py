@@ -4,6 +4,13 @@ import torch
 from torch import nn
 from torch.functional import F
 
+def auto_diff(fn, x, *args):
+    x = x.detach().clone().requires_grad_(True)
+    #x.requires_grad_(True)
+    E = fn(x, *args)
+    return torch.autograd.grad(E, x,
+                grad_outputs=torch.ones_like(E), create_graph=True)[0]
+
 class FNN(nn.Module):
     """ The FNN computes the energy (scalar) of an input, x.
         The diff() method computes dE(x)/dx.

@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from alchemist.flows import LeapFrog, Q
+from alchemist.flows import LeapFrog, Q, fix_kT
 from alchemist.modules import FNN
 
 @pytest.mark.parametrize("dim", [
@@ -10,6 +10,8 @@ from alchemist.modules import FNN
         (10),
     ])
 def test_diff(dim, t=0.0):
+    # TODO: use torch.gradcheck
+    # 
     r = torch.rand((4, dim), requires_grad=True)
     N = FNN(dim)
     E = N(r, t)
@@ -51,7 +53,38 @@ def test_reverse(dim, batch_size):
     print(logJ)
     err = torch.abs(x0 - x['r']).max().item()
     assert err == 0.0
-    assert torch.abs(logJ).max() < 1e-8
+    assert torch.abs(logJ).max().item() < 1e-8
+    assert x['t'] == 0.0
+
+def test_const_ke(batch_size=2, Na=4):
+    def U(x, t):
+        return (1+t)*(x*x).sum((-2,-1))
+
+    leap = LeapFrog( U, const_kT = 1.0 )
+
+    normal = torch.distributions.normal.Normal(0, 1)
+    def gen():
+        return normal.sample((batch_size, Na, 3))
+    x = {'r': Q(gen()),
+         'p': Q(fix_kT(gen(), 1.0)),
+         't': 0.0,
+        }
+
+    x0 = x['r']
+    print(x0)
+    logJ = 0.0
+    for i in range(10):
+        x, lJ = leap(x)
+        logJ += lJ
+    for i in range(10):
+        x, lJ = leap(x, inverse=True)
+        logJ += lJ
+    print(x['r'])
+    print(x['t'])
+    print(logJ)
+    err = torch.abs(x0 - x['r']).max().item()
+    assert err == 0.0
+    assert torch.abs(logJ).max().item() < 1e-4
     assert x['t'] == 0.0
 
 def run_tests():

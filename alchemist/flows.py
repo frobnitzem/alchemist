@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 
 # First define number formats used in forward and backward quantization
@@ -14,33 +16,72 @@ from torch import nn
 from torch.functional import F
 
 from .mixture import MixtureNormal
-from .modules import FNN
+from .modules import FNN, auto_diff
+
+def dot_x(x,y):
+    return (x*y).sum((-2,-1))
+
+def fix_kT(p, kT):
+    Ndof = p.size(-2)*p.size(-1)
+    p2 = (p*p).sum((-2,-1))
+    return p*torch.sqrt(Ndof / p2)[...,None,None]
 
 class LeapFrog(nn.Module):
-    def __init__(self, en, dt=0.001):
+    def __init__(self, en, dt=0.001, const_kT: Optional[float] = None):
         super().__init__()
         self.en = en
         self.dt = dt
+        if const_kT is not None:
+            assert const_kT > 0.0, "const_kT value must be a temp."
+        self.const_kT = const_kT
 
     def force(self, r, t):
-        return -1*self.en.diff(r, t)
+        return -1*auto_diff(self.en, r, t)
 
     def forward(self, x, inverse=False):
+        shape = x['p'].shape
         if inverse:
             x['r'] = x['r'] - Q(self.dt*x['p'])
             x['t'] = x['t'] - self.dt
             frc = self.force(x['r'], x['t'])
-            x['p'] = x['p'] - Q(self.dt*frc)
+
+            if self.const_kT:
+                Ndof = shape[-1]*shape[-2]
+                # FIXME: parameterize whole integrator by |p|**2 value
+                # (f+p)/a = mom
+                # p = a*mom-f
+                # p**2 = a**2 mom**2 - 2a mom*f + f**2
+                # 0 = a**2 nrm/2 - a mom*f + (f**2-p**2)/2
+                nrm = dot_x(x['p'], x['p'])
+                f2 = self.dt**2 * dot_x(frc, frc)
+                b = self.dt*dot_x(frc, x['p'])
+                disc = b*b + nrm*(self.const_kT*Ndof-f2)
+                a = (b + torch.sqrt(disc)) / nrm
+                x['p'] = Q(a[...,None,None]*x['p']) - Q(self.dt*frc)
+                #print(a, b, dot_x(x['p'], x['p']))
+                lJ = Ndof*torch.log(a)
+            else:
+                x['p'] = x['p'] - Q(self.dt*frc)
+                lJ = torch.zeros(shape[:-2])
         else:
             frc = self.force(x['r'], x['t'])
-            x['p'] = x['p'] + Q(self.dt*frc)
+            momentum = x['p'] + Q(self.dt*frc)
+            if self.const_kT:
+                Ndof = shape[-1]*shape[-2]
+                #ke = dot_x(x['p'], x['p'])
+                ke  = self.const_kT*Ndof
+                ke2 = dot_x(momentum, momentum)
+                fac = torch.sqrt(ke/ke2)
+                #print(1/fac)
+                x['p'] = momentum * fac[...,None,None]
+                lJ = Ndof*torch.log(fac)
+            else:
+                x['p'] = momentum
+                lJ = torch.zeros(shape[:-2])
             x['r'] = x['r'] + Q(self.dt*x['p'])
             x['t'] = x['t'] + self.dt
-        if len(x['r'].shape) == 2:
-            batches = 1
-        else:
-            batches = len(x['r'])
-        return x, torch.zeros(batches)
+
+        return x, lJ
 
 class MultiStep(nn.Module):
     def __init__(self, step, n):
@@ -54,40 +95,3 @@ class MultiStep(nn.Module):
             x, lJ = self.step(x, inverse=inverse)
             logJ += lJ
         return x, logJ
-
-def train(dataset, H0, process, loss_prior, beta=1.0):
-    """ Learn on a stream of data and yield
-        the loss after each data element.
-        Each data element should contain a data batch of samples.
-    """
-    import torch.optim as optim
-
-    #for p in process.parameters():
-    #    break
-    optimizer = optim.Adam(process.parameters(), lr=0.01)
-
-    for x in dataset:
-        batch_size = len(x['r'])
-        process.zero_grad()
-        x0, logJ = process(x)
-        loss = loss_prior() + (beta*H0(x0) - logJ)/batch_size
-        yield loss.item()
-
-        loss.backward()
-        #print(p.grad) # verified is non-zero, O(1e-5 though)
-        optimizer.step()
-
-def gen_points(elems, mixt, beta):
-    # for each batch of elems, yield a batch of coordinates
-    sigma = beta**-0.5
-    normal = torch.distributions.normal.Normal(0, sigma)
-    for z in elems:
-        #print(z)
-        r = mixt(z)
-        #print(r)
-        x = {'r': Q(r),
-             'p': Q(normal.sample(r.shape)),
-             't': 0.0,
-            }
-        yield x
-
