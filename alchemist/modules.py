@@ -13,7 +13,10 @@ def auto_diff(fn, x, *args):
 
 class FNN(nn.Module):
     """ The FNN computes the energy (scalar) of an input, x.
-        The diff() method computes dE(x)/dx.
+        The diff() method computes dE(x)/dx, but don't bother
+        implementing diff again.  The LeapFrog
+        and other integrators are just going to use auto_diff
+        from this module instead.
     """
     def __init__(self, dim):
         super().__init__()
@@ -63,4 +66,3 @@ class FNN(nn.Module):
         _, vjpfunc = torch.func.vjp(self.forward, x, t)
         vjps = vjpfunc(f)
         return vjps[0]
-
