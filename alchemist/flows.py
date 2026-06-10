@@ -23,7 +23,7 @@ def dot_x(x,y):
 
 def fix_kT(p, kT):
     Ndof = p.size(-2)*p.size(-1)
-    p2 = (p*p).sum((-2,-1))
+    p2 = dot_x(p, p)
     return p*torch.sqrt(Ndof / p2)[...,None,None]
 
 class LeapFrog(nn.Module):
@@ -83,15 +83,56 @@ class LeapFrog(nn.Module):
 
         return x, lJ
 
+class Brownian(nn.Module):
+    def __init__(self, en, sigma, beta):
+        super().__init__()
+        self.en = en
+        self.beta = beta
+        self.sigma = sigma
+        self.gamma = 0.5*beta*sigma**2
+
+    def forward(self, x, inverse=False, info={}):
+        shape = x['r'].shape
+
+        if 'dE' not in info:
+            E, dE = auto_diff(self.en, x['r'], x['t'],
+                              return_E=True)
+            info['E'] = E
+            info['dE'] = dE
+
+        Z = self.sigma * torch.randn_like(x['r'])
+        #dx = Q(-self.gamma*info['dE'] + Z)
+        dx = -self.gamma*info['dE'] + Z
+        x['r'] = x['r'] + dx
+        x['t'] = x['t'] + self.dt
+
+        E, dE = auto_diff(self.en, x['r'], x['t'], return_E=True)
+        #lJ = ( dot_x(dx - self.gamma*dE, dx - self.gamma*dE)
+        #     - dot_x(dx + self.gamma*info['dE'],
+        #             dx + self.gamma*info['dE'])
+        #     ) / (2*self.sigma**2)
+        dE2 = 0.5*(dE + info['dE'])
+        lJ = self.beta*dot_x(self.gamma*dE2 - Z, dE2)
+
+        #c = 0.5*self.gamma*(dE - info['dE'])
+        #lJ = self.beta*dot_x(dE2, self.gamma*dE2)
+
+        # store next info cache
+        info['E']  = E
+        info['dE'] = dE
+
+        return x, lJ, cache
+
+
 class MultiStep(nn.Module):
     def __init__(self, step, n):
         super().__init__()
         self.step = step
         self.n = n
 
-    def forward(self, x, inverse=False):
+    def forward(self, x, inverse=False, info={}):
         logJ = 0.0
         for i in range(self.n):
-            x, lJ = self.step(x, inverse=inverse)
+            x, lJ, info = self.step(x, inverse=inverse, info=info)
             logJ += lJ
-        return x, logJ
+        return x, logJ, info

@@ -4,12 +4,20 @@ import torch
 from torch import nn
 from torch.functional import F
 
-def auto_diff(fn, x, *args):
-    x = x.detach().clone().requires_grad_(True)
+def auto_diff(fn, x, *args, return_E=False):
+    """ Return the derivative of E = fn(x, t) with respect to x
+    x should have shape (batch, ...)
+    E should have shape (batch,)
+    """
+    #x = x.detach().clone().requires_grad_(True)
     #x.requires_grad_(True)
     E = fn(x, *args)
-    return torch.autograd.grad(E, x,
+    assert E.shape == x.shape[:1]
+    dE = torch.autograd.grad(E, x,
                 grad_outputs=torch.ones_like(E), create_graph=True)[0]
+    if return_E:
+        return E, dE
+    return dE
 
 class FNN(nn.Module):
     """ The FNN computes the energy (scalar) of an input, x.

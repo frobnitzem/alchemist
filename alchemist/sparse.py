@@ -38,6 +38,21 @@ def expand_dims(x, ind):
         x = x.unsqueeze(i)
     return x
 
+# Note: torch-pme uses a loop over atoms, where the main call is:
+#
+# rho_mesh[a].index_put_(
+#               (self.x_indices, self.y_indices, self.z_indices),
+#               (
+#                   particle_weights[:, a]
+#                   * self.interpolation_weights[self.x_shifts, :, 0]
+#                   * self.interpolation_weights[self.y_shifts, :, 1]
+#                   * self.interpolation_weights[self.z_shifts, :, 2]
+#               ),
+#               accumulate=True,
+#           )
+# That alternative implementation should be compared for
+# speed/efficiency.
+#
 def to_coo(idxs, vals, dims, wrap=None):
     """ Take a batched list of values and starting indices
         and return a coo tensor.
