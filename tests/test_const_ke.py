@@ -1,8 +1,10 @@
+from asyncio.constants import LOG_THRESHOLD_FOR_CONNLOST_WRITES
 import pytest
 import torch
+import matplotlib.pyplot as plt
 
-from alchemist.flows import LeapFrog, MultiStep, Q, fix_kT
-from alchemist.modules import FNN
+from alchemistlib.flows import LeapFrog, MultiStep, Q, fix_kT
+from alchemistlib.modules import FNN
 
 def test_ham_change(batch_size=2, Na=1000, dim=3, slope=3.0,
                        const_kT = 1.0):
@@ -35,19 +37,65 @@ def test_ham_change(batch_size=2, Na=1000, dim=3, slope=3.0,
     r2 = (r*r).sum((-2,-1))/Ndof
     p2 = (p*p).sum((-2,-1))/Ndof
     print( r2, p2, logJ )
+    x0 =  x.copy()
     for i in range(100):
-        x, lJ = leap(x)
+        x, lJ, info = leap(x)
         logJ += lJ
         r = x['r']
         p = x['p']
         r2 = (r*r).sum((-2,-1))/Ndof
         p2 = (p*p).sum((-2,-1))/Ndof
-        print( r2, p2, logJ )
+        # print( r2, p2, logJ )
+    loss = 1/const_kT*(U(r,x['t'])-U(x0['r'],0)) - logJ
+    print(loss)
+    return loss[0].item()
 
 test_ham_change(const_kT=1.0, slope=3)
 # ends @ tensor([0.1051, 0.1227], grad_fn=<DivBackward0>) tensor([1.0000, 1.0000], grad_fn=<DivBackward0>) tensor([-6815.7861, -7353.7925], grad_fn=<AddBackward0>)
 
-#test_ham_change(const_kT=None, slope=0)
+kT_range = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+kT_losses = []
+kT_vars = []
+
+slope_range = [1.5, 2, 2.5, 3.0, 3.5, 4.0, 5.5, 6.0]
+slope_losses = []
+slope_vars = []
+
+for const_kT in kT_range:
+    sub_losses = []
+    for i in range(5):
+        loss = test_ham_change(const_kT=const_kT, slope=3)
+        sub_losses.append(loss)
+    mean_loss = sum(sub_losses) / len(sub_losses)
+    kT_losses.append(mean_loss)
+    var_loss = (sum((l - mean_loss) ** 2 for l in sub_losses) / len(sub_losses))**0.5
+    kT_vars.append(var_loss)
+
+for slope in slope_range:
+    sub_losses = []
+    for i in range(5):
+        loss = test_ham_change(const_kT=1.0, slope=slope)
+        sub_losses.append(loss)
+    mean_loss = sum(sub_losses) / len(sub_losses)
+    slope_losses.append(mean_loss)
+    var_loss = (sum((l - mean_loss) ** 2 for l in sub_losses) / len(sub_losses))**0.5
+    slope_vars.append(var_loss)
+
+plt.errorbar(kT_range, kT_losses, yerr=kT_vars, fmt='-o')
+plt.xlabel("const_kT value")
+plt.ylabel("Loss")
+plt.title("Effect of const_kT on Loss")
+plt.savefig("const_kT_loss.png")
+plt.close()
+
+plt.errorbar(slope_range, slope_losses, yerr=slope_vars, fmt='-o')
+plt.xlabel("slope value")
+plt.ylabel("Loss")
+plt.title("Effect of slope on Loss")
+plt.savefig("slope_loss.png")
+plt.close()
+
+# test_ham_change(const_kT=None, slope=0)
 # ends @ tensor([0.5056, 0.5103], grad_fn=<DivBackward0>) tensor([2.0028, 1.9605], grad_fn=<DivBackward0>) tensor([0., 0.])
 
 #test_ham_change(const_kT=None, slope=3)
