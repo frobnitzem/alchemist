@@ -8,70 +8,9 @@ import torch.nn.functional as F
 
 import matplotlib.pyplot as plt
 
-from alchemistlib.flows import simpleGlowBlock, MultiStep, Q, fix_kT
-from utils import _write_pdb_trajectory, _read_pdb_coords, clone_state
-
-# ----------------------------------------------------------------------
-# Ideal-gas categorical samples
-# ----------------------------------------------------------------------
-
-def generate_ideal_gas_sample(
-    batch_size,
-    Na,
-    num_classes=2,
-    ratio=0.75,
-    device=None,
-    dtype=torch.float32,
-    shuffle=True,
-):
-    """
-    Generate ideal-gas binary categorical samples with a fixed composition.
-
-    Returns
-    -------
-    x:
-        Dictionary with:
-            x["labels"]: integer labels, shape (B, Na)
-            x["r"]: one-hot categorical tensor, shape (B, Na, 2)
-            x["p"]: dummy tensor, shape (B, Na, 2)
-            x["t"]: scalar tensor
-    """
-    assert num_classes == 2, "This function currently supports binary categories only."
-    assert 0.0 <= ratio <= 1.0, "ratio must be between 0 and 1."
-
-    if device is None:
-        device = torch.device("cpu")
-
-    n_class0 = int(round(ratio * Na))
-    n_class1 = Na - n_class0
-
-    base_labels = torch.cat(
-        [
-            torch.zeros(n_class0, dtype=torch.long, device=device),
-            torch.ones(n_class1, dtype=torch.long, device=device),
-        ],
-        dim=0,
-    )  # shape: (Na,)
-
-    labels = base_labels.unsqueeze(0).expand(batch_size, -1).clone()
-
-    if shuffle:
-        # Randomly permute sites independently for each batch item.
-        rand = torch.rand(batch_size, Na, device=device)
-        perm = rand.argsort(dim=1)
-        labels = torch.gather(labels, dim=1, index=perm)
-
-    onehot = F.one_hot(labels, num_classes=num_classes).to(dtype)
-
-    x = {
-        "labels": labels,
-        "r": onehot,
-        "p": torch.zeros(batch_size, Na, num_classes, device=device, dtype=dtype),
-        "t": torch.tensor(0.0, device=device, dtype=dtype),
-    }
-
-    return x
-
+from alchemistlib.flows import GlowBlock, MultiStep, Q, fix_kT
+from utils import _write_pdb_trajectory, _read_pdb_coords, clone_state, neighbor_masks, _format_pdb_atom
+from glowblock import build_U
 
 # ----------------------------------------------------------------------
 # Probabilistic inverse q(v | x)
@@ -141,6 +80,16 @@ def calc_argmax_flow_loss_ideal_gas(
     }
 
 
+def gen(batch_size,Na,num_classes,):
+    return torch.ones(batch_size,Na,num_classes)
+
+def genordered(batch_size,Na,num_classes):
+    idx = (torch.arange(1, 55).repeat_interleave(4)) % 2
+    base = torch.nn.functional.one_hot(idx, num_classes=2).float() #(N, 2)
+    base = base.unsqueeze(0) #(1, N, 2)
+    base = base.expand(batch_size, -1, -1) #(B, N, 2)
+    return base
+
 # ----------------------------------------------------------------------
 # Training
 # ----------------------------------------------------------------------
@@ -164,8 +113,11 @@ def train_glowblock_ideal_gas_argmax(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    glow = simpleGlowBlock(
+    U, neighborlists = build_U(batch_size, Na, num_classes, periodic=True, percenttype='direct')
+
+    glow = GlowBlock(
         dt=0.001,
+        neighborlists=neighborlists,
         network_dims=list(network_dims),
         dim=num_classes,
     ).to(device)
@@ -177,13 +129,11 @@ def train_glowblock_ideal_gas_argmax(
     losses = []
 
     for it in range(epoch_count):
-        x = generate_ideal_gas_sample(
-            batch_size=batch_size,
-            Na=Na,
-            num_classes=num_classes,
-            ratio=p_class0,
-            device=device,
-        )
+        x = {
+            "r": genordered(batch_size, Na, num_classes).to(device),
+            "p": torch.zeros(batch_size, Na, num_classes, device=device),
+            "t": torch.tensor(0.0, device=device),
+        }
 
         loss, info = calc_argmax_flow_loss_ideal_gas(
             flow=flow,
@@ -232,13 +182,11 @@ def test_glowblock_ideal_gas_argmax(
 
     flow = MultiStep(glow, n_steps_flow)
 
-    x = generate_ideal_gas_sample(
-        batch_size=batch_size,
-        Na=Na,
-        num_classes=num_classes,
-        ratio=p_class0,
-        device=device,
-    )
+    x = {
+        "r": genordered(batch_size, Na, num_classes).to(device),
+        "p": torch.zeros(batch_size, Na, num_classes, device=device),
+        "t": torch.tensor(0.0, device=device),
+    }
 
     loss, info = calc_argmax_flow_loss_ideal_gas(
         flow=flow,
@@ -286,19 +234,14 @@ def sample_from_argmax_flow(
         device = next(glow.parameters()).device
 
     flow = MultiStep(glow, n_steps_flow)
-
-    z_r = sigma * torch.randn(
-        batch_size,
-        Na,
-        num_classes,
-        device=device,
-    )
+    normal = torch.distributions.normal.Normal(0, 1)
 
     z_state = {
-        "r": z_r,
-        "p": torch.zeros_like(z_r),
+        "r": Q(normal.sample((batch_size, Na, num_classes))) * sigma,
+        "p": torch.zeros(batch_size, Na, num_classes, device=device),
         "t": torch.tensor(0.0, device=device),
     }
+    z_init = clone_state(z_state)
 
     v_state, logJ, info = flow(z_state, inverse=False)
 
@@ -311,6 +254,7 @@ def sample_from_argmax_flow(
         "labels": labels,
         "onehot": onehot,
         "sigmoid_v": torch.sigmoid(v),
+        "raw": torch.stack([z_init["r"], v_state["r"]], dim=0),
     }
 
 
@@ -320,7 +264,7 @@ def sample_from_argmax_flow(
 if __name__ == "__main__":
     coords = _read_pdb_coords()
 
-    folder = "ideal_gas_argmax"
+    folder = "neighbor_argmax"
     Path(folder).mkdir(parents=True, exist_ok=True)
 
     batch_size = 32
@@ -328,19 +272,14 @@ if __name__ == "__main__":
     num_classes = 2
     n_steps_flow = 1
 
-    # For ideal gas independent binary mixture.
-    # class 0 probability.
-    p_class0 = 0.1
-
     for epoch_count in [10000]:
         for network_dims in [(),[32],(32, 32)]:
-            filename = f"{folder}/{len(network_dims) + 1}layer_epoch{epoch_count}comp{p_class0:.2f}"
+            filename = f"{folder}/{len(network_dims) + 1}layer_epoch{epoch_count}"
 
             glow, train_losses = train_glowblock_ideal_gas_argmax(
                 batch_size=batch_size,
                 Na=Na,
                 num_classes=num_classes,
-                p_class0=p_class0,
                 sigma=1.0,
                 n_steps_flow=n_steps_flow,
                 epoch_count=epoch_count,
@@ -353,7 +292,6 @@ if __name__ == "__main__":
                 batch_size=batch_size,
                 Na=Na,
                 num_classes=num_classes,
-                p_class0=p_class0,
                 sigma=1.0,
                 n_steps_flow=n_steps_flow
             )
@@ -399,6 +337,15 @@ if __name__ == "__main__":
             plt.title(f"Test Loss: {test_loss:.4f}, Fraction Ga: {p_class0_sampled:.2f}")
             plt.savefig(f"{filename}_loss.png", dpi=150)
             plt.close()
+
+            print(samples["raw"].shape)
+
+            _write_pdb_trajectory(
+                f"{filename}_sampled.pdb",
+                coords,
+                samples["raw"][:, 0, :, 0],
+                samples["raw"][:, 0, :, 1],
+            )
 
             print("Sampled labels shape:", samples["labels"].shape)
             print("Sampled class-0 fraction:", p_class0_sampled)

@@ -33,14 +33,17 @@ def atom_energy_mixed_batched(pA_ga, f1_ga, f2_ga):
     E2 = (pA_ga * (f2_ga * 0.15 + f2_as * 0.0) +
           pA_as * (f2_ga * 0.0 + f2_as * 0.05))
 
-    return E1.sum(dim=-1) #+ E2.sum(dim=-1)
+    return E1.sum(dim=-1) + E2.sum(dim=-1)
 
-def percentA(r):
+def percentA(r, percenttype = 'chempotential'):
     # Calculate the percentage of particles that are of type A
-    dr = r[:, :, 1] - r[:, :, 0]
-    return torch.sigmoid(dr)
+    if percenttype == 'chempotential':
+        dr = r[:, :, 1] - r[:, :, 0]
+        return torch.sigmoid(dr)
+    elif percenttype == 'direct':
+        return r[..., 0:1]  # Return the fraction of class 1 (Ga) directly
 
-def build_U(batch_size, Na, dim, periodic=True):
+def build_U(batch_size, Na, dim, periodic=True, percenttype='chempotential'):
     nbr1, nbr2 = neighbor_masks(periodic=periodic)
 
     nbr1_tensor = torch.tensor(nbr1, dtype=torch.long).unsqueeze(0).expand(batch_size, -1, -1)  # (B, N, M1)
@@ -52,7 +55,7 @@ def build_U(batch_size, Na, dim, periodic=True):
         t: scalar or (B,)
         """
 
-        dr = percentA(r).unsqueeze(-1)          # (B, N, 1)
+        dr = percentA(r, percenttype=percenttype).unsqueeze(-1)          # (B, N, 1)
         dr_expanded1 = dr.expand(-1, -1, nbr1_tensor.shape[1])  # (B, N, M1)
         dr_expanded2 = dr.expand(-1, -1, nbr2_tensor.shape[1])  # (B, N, M2)
 
