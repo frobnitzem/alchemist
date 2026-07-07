@@ -25,13 +25,13 @@ def atom_energy_mixed_batched(pA_ga, f1_ga, f2_ga):
     f1_as = 1 - f1_ga
     f2_as = 1 - f2_ga
 
-    # E1 = (pA_ga * (f1_ga * 0.3 + f1_as * 0.5) +
-    #       pA_as * (f1_ga * 0.5 + f1_as * 0.1))
-    E1 = (pA_ga * (f1_ga * 0.5 + f1_as * 0.1) + #Try to make it favor Ga-As interactions more than As-Ga interactions
-           pA_as * (f1_ga * 0.1 + f1_as * 0.3))
+    E1 = (pA_ga * (f1_ga * 0.3 + f1_as * 0.5) +
+          pA_as * (f1_ga * 0.5 + f1_as * 0.1))
+    # E1 = (pA_ga * (f1_ga * 0.5 + f1_as * 0.1) + #Try to make it favor Ga-As interactions more than As-Ga interactions
+    #        pA_as * (f1_ga * 0.1 + f1_as * 0.3))
 
-    # E2 = (pA_ga * (f2_ga * 0.15 + f2_as * 0.0) +
-    #       pA_as * (f2_ga * 0.0 + f2_as * 0.05))
+    E2 = (pA_ga * (f2_ga * 0.15 + f2_as * 0.0) +
+          pA_as * (f2_ga * 0.0 + f2_as * 0.05))
 
     return E1.sum(dim=-1) #+ E2.sum(dim=-1)
 
@@ -78,6 +78,11 @@ def generate_sample(batch_size, Na, dim, sigma):
 
     return x
 
+
+def calc_loss(x, x0, logJ, U, kT, losstype = "KL"):
+    if losstype == "KL":
+        return 1 / kT * (U(x['r'], x['t']) - U(x0['r'], 0.0)) - logJ
+
 # ----------------------------------------------------------------------
 # Training GlowBlock on GaAs energy
 # ----------------------------------------------------------------------
@@ -94,7 +99,7 @@ def train_glowblock_two_part(
     network_dims=[16],
 ):
     U, neighborlists = build_U(batch_size, Na, dim, periodic=periodic)
-    glow = GlowBlock(en=U, dt=0.001, neighborlists=neighborlists, network_dims=network_dims, dim=dim)
+    glow = GlowBlock(dt=0.001, neighborlists=neighborlists, network_dims=network_dims, dim=dim)
     flow = MultiStep(glow, n_steps_flow)
 
     optimizer = optim.Adam(glow.parameters(), lr=lr)
@@ -105,7 +110,7 @@ def train_glowblock_two_part(
         x0 =  x.copy()
 
         x, logJ, info = flow(x)
-        loss = 1 / kT * (U(x['r'], x['t']) - U(x0['r'], 0.0)) - logJ
+        loss = calc_loss(x, x0, logJ, U, kT)
 
         losses.append(loss.mean().item())
         optimizer.zero_grad()
@@ -149,7 +154,7 @@ if __name__ == "__main__":
     n_steps_flow = 1
 
     for epoch_count in [10000]:
-        for kT in [0.0001]:
+        for kT in [1, 0.1, 0.01]:
             for network_dims in [[32,32]]:
 
                 filename = f'{folder}/{len(network_dims)+1}layer_epoch{epoch_count}_kT{kT}'

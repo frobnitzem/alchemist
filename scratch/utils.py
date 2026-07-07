@@ -139,3 +139,12 @@ def _read_pdb_coords(pdb_path = '../examples/GaAs/GaAs.pdb'):
         raise ValueError(f'No atom coordinates found in {pdb_path}')
 
     return torch.tensor(coords, dtype=torch.float64)
+
+def clone_state(x):
+    """
+    Safe clone for dictionary states.
+    """
+    return {
+        k: v.clone() if torch.is_tensor(v) else v
+        for k, v in x.items()
+    }

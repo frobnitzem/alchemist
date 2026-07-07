@@ -308,7 +308,7 @@ if __name__ == "__main__":
     folder = "argmaxresults"
 
     for epoch_count in [10000]:
-        for n_steps_flow in [2]:
+        for n_steps_flow in [1]:
             batch_size = 2
             network_dims = [32]
 
