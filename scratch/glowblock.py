@@ -97,7 +97,7 @@ def train_glowblock_two_part(
     kT=1.0,
     periodic=True,
     n_steps_flow=1,
-    epoch_count=25,
+    num_batches=25,
     lr=1e-3,
     network_dims=[16],
 ):
@@ -108,7 +108,7 @@ def train_glowblock_two_part(
     optimizer = optim.Adam(glow.parameters(), lr=lr)
     losses = []
 
-    for it in range(epoch_count):
+    for it in range(num_batches):
         x = generate_sample(batch_size, Na, dim, sigma)
         x0 =  x.copy()
 
@@ -121,7 +121,7 @@ def train_glowblock_two_part(
         optimizer.step()
 
         if (it + 1) % 50 == 0:
-            print(f"[train] epoch {it+1:4d}  loss = {loss.mean().item():.4f}")
+            print(f"[train] batch {it+1:4d}  loss = {loss.mean().item():.4f}")
 
     return glow, losses
 
@@ -152,17 +152,17 @@ def test_glowblock_two_part(glow, batch_size=1, Na=216, dim=2, sigma=1.0, kT=1.0
 if __name__ == "__main__":
     coords = _read_pdb_coords()
     # print(coords)
-    folder = 'glowblockenergyalt'
+    folder = 'glowblockenergy'
     batch_size = 10
     n_steps_flow = 1
 
-    for epoch_count in [10000]:
+    for num_batches in [10000]:
         for kT in [1, 0.1, 0.01]:
             for network_dims in [[32,32]]:
 
-                filename = f'{folder}/{len(network_dims)+1}layer_epoch{epoch_count}_kT{kT}'
+                filename = f'{folder}/{len(network_dims)+1}layer_num_batches{num_batches}_kT{kT}'
 
-                glow, train_losses = train_glowblock_two_part(n_steps_flow=n_steps_flow, epoch_count=epoch_count, batch_size=batch_size, network_dims=network_dims, kT=kT)
+                glow, train_losses = train_glowblock_two_part(n_steps_flow=n_steps_flow, num_batches=num_batches, batch_size=batch_size, network_dims=network_dims, kT=kT)
                 Ga_percents, test_loss = test_glowblock_two_part(glow,batch_size=batch_size, kT=kT)
 
                 torch.save(glow.state_dict(), f'{filename}_model_weights.pt')
@@ -173,10 +173,10 @@ if __name__ == "__main__":
                 _write_pdb_trajectory(_OUTPUT_PDB, coords, Ga_percents[:, 0], As_percents[:, 0])
 
                 plt.plot(train_losses, label='train loss')
-                plt.xlabel(f'Epochs')
+                plt.xlabel(f'Batches')
                 plt.ylabel('Loss')
                 plt.legend()
-                plt.suptitle(f'GlowBlock Training Loss (epoch_count={epoch_count}, n_steps_flow={n_steps_flow})')
+                plt.suptitle(f'GlowBlock Training Loss (num_batches={num_batches}, n_steps_flow={n_steps_flow})')
                 plt.title(f'Test Loss: {test_loss:.4f}')
                 plt.savefig(f'{filename}_loss.png', dpi=150)
                 plt.close()

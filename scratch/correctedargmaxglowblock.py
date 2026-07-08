@@ -100,7 +100,7 @@ def train_glowblock_ideal_gas_argmax(
     p_class0=0.75,
     sigma=1.0,
     n_steps_flow=1,
-    epoch_count=10000,
+    num_batches=10000,
     lr=1e-3,
     network_dims=(32, 32),
     device=None
@@ -128,10 +128,11 @@ def train_glowblock_ideal_gas_argmax(
 
     losses = []
 
-    for it in range(epoch_count):
+    for it in range(num_batches):
+        normal = torch.distributions.normal.Normal(0, 1)
         x = {
             "r": genordered(batch_size, Na, num_classes).to(device),
-            "p": torch.zeros(batch_size, Na, num_classes, device=device),
+            "p": Q(fix_kT(normal.sample((batch_size, Na, num_classes)), 1.0)),
             "t": torch.tensor(0.0, device=device),
         }
 
@@ -181,10 +182,11 @@ def test_glowblock_ideal_gas_argmax(
         device = next(glow.parameters()).device
 
     flow = MultiStep(glow, n_steps_flow)
+    normal = torch.distributions.normal.Normal(0, 1)
 
     x = {
         "r": genordered(batch_size, Na, num_classes).to(device),
-        "p": torch.zeros(batch_size, Na, num_classes, device=device),
+        "p": Q(fix_kT(normal.sample((batch_size, Na, num_classes)), 1.0)),
         "t": torch.tensor(0.0, device=device),
     }
 
@@ -238,7 +240,7 @@ def sample_from_argmax_flow(
 
     z_state = {
         "r": Q(normal.sample((batch_size, Na, num_classes))) * sigma,
-        "p": torch.zeros(batch_size, Na, num_classes, device=device),
+        "p": Q(fix_kT(normal.sample((batch_size, Na, num_classes)), 1.0)),
         "t": torch.tensor(0.0, device=device),
     }
     z_init = clone_state(z_state)
@@ -272,9 +274,9 @@ if __name__ == "__main__":
     num_classes = 2
     n_steps_flow = 1
 
-    for epoch_count in [10000]:
+    for num_batches in [10000]:
         for network_dims in [(),[32],(32, 32)]:
-            filename = f"{folder}/{len(network_dims) + 1}layer_epoch{epoch_count}"
+            filename = f"{folder}/{len(network_dims) + 1}layer_num_batches{num_batches}_nsteps{n_steps_flow}"
 
             glow, train_losses = train_glowblock_ideal_gas_argmax(
                 batch_size=batch_size,
@@ -282,7 +284,7 @@ if __name__ == "__main__":
                 num_classes=num_classes,
                 sigma=1.0,
                 n_steps_flow=n_steps_flow,
-                epoch_count=epoch_count,
+                num_batches=num_batches,
                 lr=1e-3,
                 network_dims=network_dims
             )
@@ -327,12 +329,12 @@ if __name__ == "__main__":
             p_class0_sampled = samples["onehot"][..., 0].mean().item()
 
             plt.plot(train_losses, label="train loss")
-            plt.xlabel("Epochs")
+            plt.xlabel("Batches")
             plt.ylabel("Negative ELBO")
             plt.legend()
             plt.suptitle(
                 f"Ideal Gas Argmax Flow "
-                f"(epoch_count={epoch_count}, n_steps_flow={n_steps_flow})"
+                f"(num_batches={num_batches}, n_steps_flow={n_steps_flow})"
             )
             plt.title(f"Test Loss: {test_loss:.4f}, Fraction Ga: {p_class0_sampled:.2f}")
             plt.savefig(f"{filename}_loss.png", dpi=150)
