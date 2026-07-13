@@ -66,7 +66,7 @@ def generate_ideal_gas_sample(
     x = {
         "labels": labels,
         "r": onehot,
-        "p": Q(fix_kT(normal.sample((batch_size, Na, num_classes)), 1.0)),
+        "p": normal.sample((batch_size, Na, num_classes)),
         "t": torch.tensor(0.0, device=device, dtype=dtype),
     }
 
@@ -77,9 +77,6 @@ def generate_ideal_gas_sample(
 # Probabilistic inverse q(v | x)
 # ----------------------------------------------------------------------
 def sample_v(x_onehot):
-    """
-    Binary softplus-threshold probabilistic inverse for Argmax Flow.
-    """
     B, N, K = x_onehot.shape
     assert K == 2, "This helper is for binary categories only."
 
@@ -121,16 +118,28 @@ def calc_argmax_flow_loss_ideal_gas(
     # Sample v ~ q(v|x) satisfying argmax(v) = x.
     v, logq = sample_v(x["r"])
 
-    v_flow = clone_state(x)
-    v_flow["r"] = v
+    # q(a | v, x) = N(0, I), chosen here to be independent.
+    # Keep the original tensor because flow mutates/replaces state entries.
+    p_aux = sigma * torch.randn_like(v)
 
-    z, logJ, info = flow(v_flow, inverse=True)
+    observed_state = {
+        "r": v,
+        "p": p_aux,
+        "t": torch.tensor(0.0, device=v.device),
+    }
+
+    z, logJ, info = flow(observed_state, inverse=True)
 
     # Base density log p(z)
     logpz = -0.5 * math.log(2.0 * math.pi * sigma ** 2) - 0.5 * (z["r"] / sigma) ** 2
     logpz = logpz.sum(dim=[1, 2])
 
-    loss = -(logpz + logJ - logq)
+    logpp = -0.5 * math.log(2.0 * math.pi * sigma ** 2) - 0.5 * (z['p'] / sigma) ** 2
+    logpp = logpp.sum(dim=[1, 2])
+    logq_p_aux = -0.5 * math.log(2.0 * math.pi * sigma ** 2) - 0.5 * (p_aux / sigma) ** 2
+    logq_p_aux = logq_p_aux.sum(dim=[1, 2]) 
+
+    loss = -(logpz + logJ - logq - logq_p_aux + logpp)
 
     return loss, {
         "log_pz": logpz.detach(),
@@ -138,6 +147,8 @@ def calc_argmax_flow_loss_ideal_gas(
         "log_q_v_given_x": logq.detach(),
         "v": v.detach(),
         "z_r": z["r"].detach(),
+        "log_pp": logpp.detach(),
+        "log_q_p_aux": logq_p_aux.detach(),
     }
 
 
@@ -202,12 +213,16 @@ def train_glowblock_ideal_gas_argmax(
         if (it + 1) % 50 == 0:
             mean_log_pz = info["log_pz"].mean().item()
             mean_log_q = info["log_q_v_given_x"].mean().item()
+            mean_log_pp = info["log_pp"].mean().item()
+            mean_log_q_p_aux = info["log_q_p_aux"].mean().item()
 
             print(
                 f"[train] epoch {it + 1:5d} | "
                 f"loss = {mean_loss.item(): .4f} | "
                 f"log p(z) = {mean_log_pz: .4f} | "
-                f"log q(v|x) = {mean_log_q: .4f}"
+                f"log q(v|x) = {mean_log_q: .4f} | "
+                f"log p(p|v,x) = {mean_log_pp: .4f} | "
+                f"log q(p|v,x) = {mean_log_q_p_aux: .4f}"
             )
 
     return glow, losses
@@ -294,12 +309,15 @@ def sample_from_argmax_flow(
         device=device,
     )
 
-    normal = torch.distributions.normal.Normal(0, 1)
+    z_p = sigma * torch.randn_like(z_r)
 
     z_state = {
         "r": z_r,
-        "p": Q(fix_kT(normal.sample((batch_size, Na, num_classes)), 1.0)),
-        "t": torch.tensor(0.0, device=device),
+        "p": z_p,
+        "t": torch.tensor(
+            0.0,
+            device=device
+        ),
     }
 
     v_state, logJ, info = flow(z_state, inverse=False)
@@ -332,75 +350,83 @@ if __name__ == "__main__":
 
     # For ideal gas independent binary mixture.
     # class 0 probability.
-    p_class0 = 0.1
+    # p_class0 = 0.75
 
-    for num_batches in [10000]:
-        for network_dims in [(),[32],(32, 32)]:
-            filename = f"{folder}/{len(network_dims) + 1}layer_num_batches{num_batches}_nsteps{n_steps_flow}"
+    for p_class0 in [0.1,0.5,0.75]:
+        for num_batches in [3000]:
+            for network_dims in [(),[32],(32, 32)]:
+                filename = f"{folder}/{len(network_dims) + 1}layer_num_batches{num_batches}_comp{p_class0:.2f}"
 
-            glow, train_losses = train_glowblock_ideal_gas_argmax(
-                batch_size=batch_size,
-                Na=Na,
-                num_classes=num_classes,
-                p_class0=p_class0,
-                sigma=1.0,
-                n_steps_flow=n_steps_flow,
-                num_batches=num_batches,
-                lr=1e-3,
-                network_dims=network_dims
-            )
+                glow, train_losses = train_glowblock_ideal_gas_argmax(
+                    batch_size=batch_size,
+                    Na=Na,
+                    num_classes=num_classes,
+                    p_class0=p_class0,
+                    sigma=1.0,
+                    n_steps_flow=n_steps_flow,
+                    num_batches=num_batches,
+                    lr=1e-3,
+                    network_dims=network_dims
+                )
 
-            frames, test_loss = test_glowblock_ideal_gas_argmax(
-                glow,
-                batch_size=batch_size,
-                Na=Na,
-                num_classes=num_classes,
-                p_class0=p_class0,
-                sigma=1.0,
-                n_steps_flow=n_steps_flow
-            )
+                frames, test_loss = test_glowblock_ideal_gas_argmax(
+                    glow,
+                    batch_size=batch_size,
+                    Na=Na,
+                    num_classes=num_classes,
+                    p_class0=p_class0,
+                    sigma=1.0,
+                    n_steps_flow=n_steps_flow
+                )
 
-            torch.save(glow.state_dict(), f"{filename}_model_weights.pt")
+                torch.save(glow.state_dict(), f"{filename}_model_weights.pt")
 
-            # Interpret channel 0 as Ga and channel 1 as As.
-            Ga_percents = frames[..., 0]
-            As_percents = frames[..., 1]
+                # Interpret channel 0 as Ga and channel 1 as As.
+                Ga_percents = frames[..., 0]
+                As_percents = frames[..., 1]
 
-            print("Ga_percents shape:", Ga_percents.shape)
-            print("As_percents shape:", As_percents.shape)
+                print("Ga_percents shape:", Ga_percents.shape)
+                print("As_percents shape:", As_percents.shape)
 
-            _OUTPUT_PDB = f"{filename}.pdb"
+                _OUTPUT_PDB = f"{filename}.pdb"
 
-            # Write only first batch item.
-            _write_pdb_trajectory(
-                _OUTPUT_PDB,
-                coords,
-                Ga_percents[:, 0],
-                As_percents[:, 0],
-            )
+                # Write only first batch item.
+                _write_pdb_trajectory(
+                    _OUTPUT_PDB,
+                    coords,
+                    Ga_percents[:, 0],
+                    As_percents[:, 0],
+                )
 
-            # Optional: generate samples from the trained model.
-            samples = sample_from_argmax_flow(
-                glow,
-                batch_size=32,
-                Na=Na,
-                num_classes=num_classes,
-                sigma=1.0,
-                n_steps_flow=n_steps_flow,
-            )
-            p_class0_sampled = samples["onehot"][..., 0].mean().item()
+                # Optional: generate samples from the trained model.
+                samples = sample_from_argmax_flow(
+                    glow,
+                    batch_size=1000,
+                    Na=Na,
+                    num_classes=num_classes,
+                    sigma=1.0,
+                    n_steps_flow=n_steps_flow,
+                )
+                p_class0_sampled = samples["onehot"][..., 0].mean().item()
 
-            plt.plot(train_losses, label="train loss")
-            plt.xlabel("Batches")
-            plt.ylabel("Negative ELBO")
-            plt.legend()
-            plt.suptitle(
-                f"Ideal Gas Argmax Flow "
-                f"(num_batches={num_batches}, n_steps_flow={n_steps_flow})"
-            )
-            plt.title(f"Test Loss: {test_loss:.4f}, Fraction Ga: {p_class0_sampled:.2f}")
-            plt.savefig(f"{filename}_loss.png", dpi=150)
-            plt.close()
+                plt.plot(train_losses, label="train loss")
+                plt.xlabel("Batches")
+                plt.ylabel("Negative ELBO")
+                plt.legend()
+                plt.suptitle(
+                    f"Ideal Gas Argmax Flow "
+                    f"(num_batches={num_batches}, n_steps_flow={n_steps_flow})"
+                )
+                plt.title(f"Test Loss: {test_loss:.4f}, Fraction Ga: {p_class0_sampled:.2f}")
+                plt.savefig(f"{filename}_loss.png", dpi=150)
+                plt.close()
 
-            print("Sampled labels shape:", samples["labels"].shape)
-            print("Sampled class-0 fraction:", p_class0_sampled)
+                plt.hist(torch.mean(1-samples["labels"].float(), dim=1), bins=20, density=True)
+                plt.xlabel("Class Label")
+                plt.ylabel("Density")
+                plt.title(f"Distribution of Sampled Class Labels (Fraction Ga: {p_class0_sampled:.2f})")
+                plt.savefig(f"{filename}_class_label_distribution.png", dpi=150)
+                plt.close()
+
+                print("Sampled labels shape:", samples["labels"].shape)
+                print("Sampled class-0 fraction:", p_class0_sampled)

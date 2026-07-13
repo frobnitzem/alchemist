@@ -27,8 +27,8 @@ def atom_energy_mixed_batched(pA_ga, f1_ga, f2_ga):
 
     E1 = (pA_ga * (f1_ga * 0.3 + f1_as * 0.5) +
           pA_as * (f1_ga * 0.5 + f1_as * 0.1))
-    # E1 = (pA_ga * (f1_ga * 0.5 + f1_as * 0.1) + #Try to make it favor Ga-As interactions more than As-Ga interactions
-    #        pA_as * (f1_ga * 0.1 + f1_as * 0.3))
+    # E1 = (pA_ga * (f1_ga * 0.3 + f1_as * 0.1) + #Try to make it favor Ga-As interactions more than As-Ga interactions
+    #        pA_as * (f1_ga * 0.1 + f1_as * 0.5))
 
     E2 = (pA_ga * (f2_ga * 0.15 + f2_as * 0.0) +
           pA_as * (f2_ga * 0.0 + f2_as * 0.05))
@@ -152,12 +152,12 @@ def test_glowblock_two_part(glow, batch_size=1, Na=216, dim=2, sigma=1.0, kT=1.0
 if __name__ == "__main__":
     coords = _read_pdb_coords()
     # print(coords)
-    folder = 'glowblockenergy'
+    folder = 'glowblockenergyposter'
     batch_size = 10
     n_steps_flow = 1
 
     for num_batches in [10000]:
-        for kT in [1, 0.1, 0.01]:
+        for kT in [1, 0.5, 0.1, 0.05, 0.01]:
             for network_dims in [[32,32]]:
 
                 filename = f'{folder}/{len(network_dims)+1}layer_num_batches{num_batches}_kT{kT}'
@@ -172,11 +172,13 @@ if __name__ == "__main__":
                 print(Ga_percents.shape, As_percents.shape)
                 _write_pdb_trajectory(_OUTPUT_PDB, coords, Ga_percents[:, 0], As_percents[:, 0])
 
+                plt.figure(figsize=(5, 4))
                 plt.plot(train_losses, label='train loss')
                 plt.xlabel(f'Batches')
                 plt.ylabel('Loss')
                 plt.legend()
                 plt.suptitle(f'GlowBlock Training Loss (num_batches={num_batches}, n_steps_flow={n_steps_flow})')
                 plt.title(f'Test Loss: {test_loss:.4f}')
+                plt.tight_layout()
                 plt.savefig(f'{filename}_loss.png', dpi=150)
                 plt.close()

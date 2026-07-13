@@ -21,8 +21,8 @@ def atom_energy_mixed_batched(pA_ga, f1_ga, f2_ga):
     f1_as = 1 - f1_ga
     f2_as = 1 - f2_ga
 
-    E1 = (pA_ga * (f1_ga * 0.1 + f1_as * -0.1) +
-          pA_as * (f1_ga * -0.1 + f1_as * 0.1))
+    E1 = (pA_ga * (f1_ga * 0.3 + f1_as * 0.1) +
+          pA_as * (f1_ga * 0.1 + f1_as * 0.5))
 
     # E2 = (pA_ga * (f2_ga * -0.1 + f2_as * 0.0) +
     #       pA_as * (f2_ga * 0.0 + f2_as * -0.1))
@@ -78,7 +78,7 @@ def _write_pdb_trajectory(pdb_path, coords, ga_percents, as_percents):
             pdb_file.write('ENDMDL\n')
         pdb_file.write('END\n')
 
-_GAAS_PDB = Path(__file__).resolve().parents[1] / 'examples' / 'GaAs' / 'GaAs.pdb'
+_GAAS_PDB = "../../examples/GaAs/GaAs.pdb"
 _GAAS_SCALE = 5.75
 
 
@@ -195,7 +195,7 @@ def test_two_part(batch_size=1, Na=216, dim=2, sigma=1.0, periodic=False):
 
     Ga_percents = [percentA(x0['r'])]
 
-    for i in range(1000):
+    for i in range(5000):
         x, lJ, info = leap(x)
         logJ += lJ
         r = x['r']
@@ -213,7 +213,7 @@ Ga_percents = test_two_part(periodic=True)
 Ga_percents = torch.stack(Ga_percents)
 As_percents = 1 - Ga_percents
 
-_OUTPUT_PDB = Path(__file__).with_suffix('.pdb')
+_OUTPUT_PDB = 'leapfrogresults/alternating_newEnergy.pdb'
 _write_pdb_trajectory(_OUTPUT_PDB, coords, Ga_percents[:, 0], As_percents[:, 0])
 
 import matplotlib.pyplot as plt
@@ -224,5 +224,5 @@ plt.xlabel("Percent Ga")
 plt.ylabel("count")
 plt.title("Histogram of Percent Ga values")
 plt.tight_layout()
-plt.savefig("percentGa_histogram2.png", dpi=150)
+plt.savefig("percentGa_histogramalt.png", dpi=150)
 plt.close()

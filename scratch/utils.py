@@ -124,22 +124,6 @@ def neighbor_masks(periodic=True, pdb_path="../examples/GaAs/GaAs.pdb"):
     return nbr1, nbr2
 
 
-def _read_pdb_coords(pdb_path = '../examples/GaAs/GaAs.pdb'):
-    coords = []
-    with open(pdb_path, 'r') as pdb_file:
-        for line in pdb_file:
-            if line.startswith('ATOM') or line.startswith('HETATM'):
-                coords.append([
-                    float(line[30:38]),
-                    float(line[38:46]),
-                    float(line[46:54]),
-                ])
-
-    if not coords:
-        raise ValueError(f'No atom coordinates found in {pdb_path}')
-
-    return torch.tensor(coords, dtype=torch.float64)
-
 def clone_state(x):
     """
     Safe clone for dictionary states.
@@ -148,3 +132,38 @@ def clone_state(x):
         k: v.clone() if torch.is_tensor(v) else v
         for k, v in x.items()
     }
+
+def read_compositions_by_frame(filename, frame_keyword="MODEL"):
+    frames = []
+    current_frame = []
+
+    with open(filename, "r") as f:
+        for line in f:
+            line = line.strip()
+
+            # Detect start of a new frame
+            if line.startswith(frame_keyword):
+                if current_frame:
+                    frames.append(torch.tensor(current_frame))
+                    current_frame = []
+                continue
+
+            # Skip empty or non-numeric lines
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+
+            # Try to parse last two columns as floats
+            try:
+                compA = float(parts[-2])
+                compB = float(parts[-1])
+                current_frame.append([compA, compB])
+            except ValueError:
+                # Not a numeric line
+                continue
+
+    # Append last frame if not empty
+    if current_frame:
+        frames.append(torch.tensor(current_frame))
+
+    return frames

@@ -88,7 +88,7 @@ if __name__ == "__main__":
     # print(coords)
     test_count = 50000
     scale = test_count // 5
-    folder = 'glowblockenergyalt'
+    folder = 'glowblockenergyaltposter'
     for nn_model in glob.glob(f'{folder}/*_model_weights.pt'):
         print(f"Testing model: {nn_model}")
         filename = folder + '/' + nn_model.split('/')[-1][:-len('_model_weights.pt')]
@@ -105,7 +105,7 @@ if __name__ == "__main__":
         U, neighborlists = build_U(1, 216, 2, periodic=True)
         first_pairs = _build_neighbor_pairs(neighborlists[0])
         second_pairs = _build_neighbor_pairs(neighborlists[1])
-        glow = GlowBlock(en=U, dt=0.001, neighborlists=neighborlists, network_dims=networkdims, dim=2)
+        glow = GlowBlock(dt=0.001, neighborlists=neighborlists, network_dims=networkdims, dim=2)
         flow = MultiStep(glow, 1)
         weights = torch.load(nn_model)
         glow.load_state_dict(weights)
@@ -142,7 +142,7 @@ if __name__ == "__main__":
                 # energy = interactions[0] * 0.3 + interactions[1] * 0.5 + interactions[2] * 0.1 + \
                 #          interactions[3] * 0.15 + interactions[4] * 0.0 + interactions[5] * 0.05
 
-                energy = interactions[0] * 0.5 + interactions[1] * 0.1 + interactions[2] * 0.3
+                energy = interactions[0] * 0.3 + interactions[1] * 0.1 + interactions[2] * 0.5
                 t3 = time.perf_counter()
                 overall_energies[i] = energy
 

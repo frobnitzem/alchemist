@@ -187,10 +187,10 @@ class simpleGlowBlock(nn.Module):
         self.step3 = self.make_net(dim, network_dims, dim)
         self.step4 = self.make_net(dim, network_dims, dim)
 
-        self.step1.apply(self.zero_init)
-        self.step2.apply(self.zero_init)
-        self.step3.apply(self.zero_init)
-        self.step4.apply(self.zero_init)
+        self.initialize_coupling_net(self.step1)
+        self.initialize_coupling_net(self.step2)
+        self.initialize_coupling_net(self.step3)
+        self.initialize_coupling_net(self.step4)
 
     def make_net(self, in_dim, hidden_dims, out_dim):
         layers = []
@@ -203,10 +203,24 @@ class simpleGlowBlock(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def zero_init(self, m):
-        if isinstance(m, nn.Linear):
-            nn.init.zeros_(m.weight)
-            nn.init.zeros_(m.bias)
+    # def zero_init(self, m):
+    #     if isinstance(m, nn.Linear):
+    #         nn.init.zeros_(m.weight)
+    #         nn.init.zeros_(m.bias)
+
+    def initialize_coupling_net(self, net: nn.Sequential) -> None:
+        linear_layers = [
+            module for module in net.modules()
+            if isinstance(module, nn.Linear)
+        ]
+
+        for layer in linear_layers:
+            nn.init.kaiming_uniform_(layer.weight, nonlinearity="relu")
+            nn.init.zeros_(layer.bias)
+
+        # Zero only the final output layer.
+        nn.init.zeros_(linear_layers[-1].weight)
+        nn.init.zeros_(linear_layers[-1].bias)
 
     def st1(self, r, t):
         #implement NN to calculate s,t fom r,t
