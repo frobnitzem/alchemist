@@ -8,30 +8,7 @@ import matplotlib.pyplot as plt
 from utils import read_compositions_by_frame, neighbor_masks
 from summary_glowblock import _compute_interactions, _build_neighbor_pairs
 
-def atom_energy_mixed_batched(pA_ga, f1_ga, f2_ga):
-    """
-    pA_ga : (N, 1) tensor of Ga composition for each atom A
-    f1_ga : (N, 4) tensor of Ga fractions among NN1
-    f2_ga : (N, 12) tensor of Ga fractions among NN2
-
-    Returns:
-        () energy of the system
-    """
-
-    # Fractions of As
-    pA_as = 1 - pA_ga
-    f1_as = 1 - f1_ga
-    f2_as = 1 - f2_ga
-
-    E1 = (pA_ga * (f1_ga * 0.3 + f1_as * 0.5) +
-          pA_as * (f1_ga * 0.5 + f1_as * 0.1))
-    # E1 = (pA_ga * (f1_ga * 0.3 + f1_as * 0.1) + #Try to make it favor Ga-As interactions more than As-Ga interactions
-    #        pA_as * (f1_ga * 0.1 + f1_as * 0.5))
-
-    E2 = (pA_ga * (f2_ga * 0.15 + f2_as * 0.0) +
-          pA_as * (f2_ga * 0.0 + f2_as * 0.05))
-
-    return (E1.sum(dim=-1)).sum(-1)  + (E2.sum(dim=-1)).sum(dim=-1)
+from energyfunc import atom_energy_mixed_batched
 
 if __name__ == "__main__":
     plt.figure(figsize=(5, 4))
@@ -41,10 +18,10 @@ if __name__ == "__main__":
     N=216
 
     ga_energies = [
-        atom_energy_mixed_batched(torch.ones(N, 1), torch.ones(N, 4), torch.ones(N, 12)), # all Ga
-        atom_energy_mixed_batched(torch.zeros(N, 1), torch.zeros(N, 4), torch.zeros(N, 12)), # all As
-        atom_energy_mixed_batched(torch.ones(N // 2, 1), torch.zeros(N // 2, 4), torch.ones(N // 2, 12))+atom_energy_mixed_batched(torch.zeros(N // 2, 1), torch.ones(N // 2, 4), torch.zeros(N // 2, 12)), # perfect alternating
-        atom_energy_mixed_batched(torch.ones(N, 1)/2, torch.ones(N, 4)/2, torch.ones(N, 12)/2) # random mixture
+        atom_energy_mixed_batched(torch.ones(N, 1), torch.ones(N, 4), torch.ones(N, 12)).sum(), # all Ga
+        atom_energy_mixed_batched(torch.zeros(N, 1), torch.zeros(N, 4), torch.zeros(N, 12)).sum(), # all As
+        atom_energy_mixed_batched(torch.ones(N // 2, 1), torch.zeros(N // 2, 4), torch.ones(N // 2, 12)).sum() + atom_energy_mixed_batched(torch.zeros(N // 2, 1), torch.ones(N // 2, 4), torch.zeros(N // 2, 12)).sum(), # perfect alternating
+        atom_energy_mixed_batched(torch.ones(N, 1)/2, torch.ones(N, 4)/2, torch.ones(N, 12)/2).sum() # random mixture
     ]
 
     colors = ['g', 'b', 'c', 'm', 'y']

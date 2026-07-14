@@ -5,29 +5,7 @@ import torch
 
 from alchemistlib.flows import LeapFrog, MultiStep, Q, fix_kT
 from alchemistlib.modules import FNN
-
-def atom_energy_mixed_batched(pA_ga, f1_ga, f2_ga):
-    """
-    pA_ga : (B, N, 1) tensor of Ga composition for each atom A
-    f1_ga : (B, N, 4) tensor of Ga fractions among NN1
-    f2_ga : (B, N, 12) tensor of Ga fractions among NN2
-
-    Returns:
-        (B, N) tensor of energies for each atom A in each batch
-    """
-
-    # Fractions of As
-    pA_as = 1 - pA_ga
-    f1_as = 1 - f1_ga
-    f2_as = 1 - f2_ga
-
-    E1 = (pA_ga * (f1_ga * 0.3 + f1_as * 0.1) +
-          pA_as * (f1_ga * 0.1 + f1_as * 0.5))
-
-    # E2 = (pA_ga * (f2_ga * -0.1 + f2_as * 0.0) +
-    #       pA_as * (f2_ga * 0.0 + f2_as * -0.1))
-
-    return E1.sum(dim=-1) #+ E2.sum(dim=-1)
+from energyfunc import atom_energy_mixed_batched
 
 def percentA(r):
     #Calculate the percentage of particles that are of type A based on their positions, using a sigmoid function to determine the probability of being type A or B.
@@ -168,7 +146,7 @@ def test_two_part(batch_size=1, Na=216, dim=2, sigma=1.0, periodic=False):
         nbr2_vals = torch.gather(dr_expanded, dim=1, index=nbr2_tensor).squeeze(-1)
 
         # print(nbr1_vals.shape)
-        return (atom_energy_mixed_batched(dr, nbr1_vals, nbr2_vals)).sum(1)
+        return (atom_energy_mixed_batched(dr, nbr1_vals, nbr2_vals, params = [0.3,0.1,0.1,0.5,0,0,0,0]).sum(1))
 
     kT = 1
     leap = MultiStep(LeapFrog(U), 10)

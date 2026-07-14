@@ -6,34 +6,11 @@ from pathlib import Path
 
 from alchemistlib.flows import GlowBlock, MultiStep, Q, fix_kT
 from alchemistlib.modules import FNN
-from utils import _format_pdb_atom, _write_pdb_trajectory, neighbor_masks, _read_pdb_coords
+from utils import _write_pdb_trajectory, _read_pdb_coords, build_crystal_U
 
 import matplotlib.pyplot as plt
 
-def atom_energy_mixed_batched(pA_ga, f1_ga, f2_ga):
-    """
-    pA_ga : (B, N, 1) tensor of Ga composition for each atom A
-    f1_ga : (B, N, 4) tensor of Ga fractions among NN1
-    f2_ga : (B, N, 12) tensor of Ga fractions among NN2
-
-    Returns:
-        (B, N) tensor of energies for each atom A in each batch
-    """
-
-    # Fractions of As
-    pA_as = 1 - pA_ga
-    f1_as = 1 - f1_ga
-    f2_as = 1 - f2_ga
-
-    E1 = (pA_ga * (f1_ga * 0.3 + f1_as * 0.5) +
-          pA_as * (f1_ga * 0.5 + f1_as * 0.1))
-    # E1 = (pA_ga * (f1_ga * 0.3 + f1_as * 0.1) + #Try to make it favor Ga-As interactions more than As-Ga interactions
-    #        pA_as * (f1_ga * 0.1 + f1_as * 0.5))
-
-    E2 = (pA_ga * (f2_ga * 0.15 + f2_as * 0.0) +
-          pA_as * (f2_ga * 0.0 + f2_as * 0.05))
-
-    return E1.sum(dim=-1) + E2.sum(dim=-1)
+from traintest import train_glowblock_two_part, test_glowblock_two_part
 
 def percentA(r, percenttype = 'chempotential'):
     # Calculate the percentage of particles that are of type A
@@ -42,32 +19,6 @@ def percentA(r, percenttype = 'chempotential'):
         return torch.sigmoid(dr)
     elif percenttype == 'direct':
         return r[..., 0:1]  # Return the fraction of class 1 (Ga) directly
-
-def build_U(batch_size, Na, dim, periodic=True, percenttype='chempotential'):
-    nbr1, nbr2 = neighbor_masks(periodic=periodic)
-
-    nbr1_tensor = torch.tensor(nbr1, dtype=torch.long).unsqueeze(0).expand(batch_size, -1, -1)  # (B, N, M1)
-    nbr2_tensor = torch.tensor(nbr2, dtype=torch.long).unsqueeze(0).expand(batch_size, -1, -1)  # (B, N, M2)
-
-    def U(r, t):
-        """
-        r: (B, Na, dim)
-        t: scalar or (B,)
-        """
-
-        dr = percentA(r, percenttype=percenttype).unsqueeze(-1)          # (B, N, 1)
-        dr_expanded1 = dr.expand(-1, -1, nbr1_tensor.shape[1])  # (B, N, M1)
-        dr_expanded2 = dr.expand(-1, -1, nbr2_tensor.shape[1])  # (B, N, M2)
-
-        # First-shell neighbor values: (B, N, 4)
-        nbr1_vals = torch.gather(dr_expanded1, dim=1, index=nbr1_tensor)
-
-        # Second-shell neighbor values: (B, N, 12)
-        nbr2_vals = torch.gather(dr_expanded2, dim=1, index=nbr2_tensor)
-
-        return atom_energy_mixed_batched(dr, nbr1_vals, nbr2_vals).sum(1)
-
-    return U, [nbr1, nbr2]
 
 def generate_sample(batch_size, Na, dim, sigma):
     normal = torch.distributions.normal.Normal(0, 1)
@@ -89,63 +40,6 @@ def calc_loss(x, x0, logJ, U, kT, losstype = "KL"):
 # ----------------------------------------------------------------------
 # Training GlowBlock on GaAs energy
 # ----------------------------------------------------------------------
-def train_glowblock_two_part(
-    batch_size=1,
-    Na=216,
-    dim=2,
-    sigma=1.0,
-    kT=1.0,
-    periodic=True,
-    n_steps_flow=1,
-    num_batches=25,
-    lr=1e-3,
-    network_dims=[16],
-):
-    U, neighborlists = build_U(batch_size, Na, dim, periodic=periodic)
-    glow = GlowBlock(dt=0.001, neighborlists=neighborlists, network_dims=network_dims, dim=dim)
-    flow = MultiStep(glow, n_steps_flow)
-
-    optimizer = optim.Adam(glow.parameters(), lr=lr)
-    losses = []
-
-    for it in range(num_batches):
-        x = generate_sample(batch_size, Na, dim, sigma)
-        x0 =  x.copy()
-
-        x, logJ, info = flow(x)
-        loss = calc_loss(x, x0, logJ, U, kT)
-
-        losses.append(loss.mean().item())
-        optimizer.zero_grad()
-        loss.mean().backward()
-        optimizer.step()
-
-        if (it + 1) % 50 == 0:
-            print(f"[train] batch {it+1:4d}  loss = {loss.mean().item():.4f}")
-
-    return glow, losses
-
-
-# ----------------------------------------------------------------------
-# Testing GlowBlock: trajectory + PDB + histogram
-# ----------------------------------------------------------------------
-def test_glowblock_two_part(glow, batch_size=1, Na=216, dim=2, sigma=1.0, kT=1.0, periodic=True):
-    U, neighborlists = build_U(batch_size, Na, dim, periodic=periodic)
-    flow = MultiStep(glow, 1)
-
-    x = generate_sample(batch_size, Na, dim, sigma)
-    x0 = x.copy()
-
-    Ga_percents = [percentA(x0['r'])]
-
-    x, logJ, info = flow(x)
-    Ga_percents.append(percentA(x['r']))
-
-    loss = 1 / kT * (U(x['r'], x['t']) - U(x0['r'], 0.0)) - logJ
-
-    return torch.stack(Ga_percents), loss.mean().item()
-
-
 # ----------------------------------------------------------------------
 # Main: train, test, write PDB, plot histogram
 # ----------------------------------------------------------------------
@@ -155,6 +49,7 @@ if __name__ == "__main__":
     folder = 'glowblockenergyposter'
     batch_size = 10
     n_steps_flow = 1
+    U, neighborlists = build_crystal_U(percentA,batch_size, 216, 2, periodic=True)
 
     for num_batches in [10000]:
         for kT in [1, 0.5, 0.1, 0.05, 0.01]:
@@ -162,8 +57,33 @@ if __name__ == "__main__":
 
                 filename = f'{folder}/{len(network_dims)+1}layer_num_batches{num_batches}_kT{kT}'
 
-                glow, train_losses = train_glowblock_two_part(n_steps_flow=n_steps_flow, num_batches=num_batches, batch_size=batch_size, network_dims=network_dims, kT=kT)
-                Ga_percents, test_loss = test_glowblock_two_part(glow,batch_size=batch_size, kT=kT)
+                glow = GlowBlock(dt=0.001, neighborlists=neighborlists, network_dims=network_dims, dim=2)
+                flow = MultiStep(glow, n_steps_flow)
+                loss_func = lambda x, x0, logJ: calc_loss(x, x0, logJ, U, kT)
+
+                glow, train_losses = train_glowblock_two_part(
+                    flow=flow,
+                    model=glow,
+                    generate_sample=generate_sample,
+                    loss_func=loss_func,
+                    batch_size=batch_size,
+                    Na=216,
+                    dim=2,
+                    sigma=1.0,
+                    num_batches=num_batches,
+                    lr=1e-3,
+                )
+                Ga_percents, test_loss = test_glowblock_two_part(
+                    flow=flow,
+                    generate_sample=generate_sample,
+                    percent_func=percentA,
+                    loss_func=loss_func,
+                    batch_size=batch_size,
+                    Na=216,
+                    dim=2,
+                    sigma=1.0,
+                    compute_loss=True,
+                )
 
                 torch.save(glow.state_dict(), f'{filename}_model_weights.pt')
 

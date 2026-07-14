@@ -167,3 +167,54 @@ def read_compositions_by_frame(filename, frame_keyword="MODEL"):
         frames.append(torch.tensor(current_frame))
 
     return frames
+
+def atom_energy_mixed_batched(pA_ga, f1_ga, f2_ga, params = [0.3, 0.5, 0.5, 0.1, 0.15, 0.0, 0.0, 0.05]):
+    """
+    pA_ga : (B, N, 1) tensor of Ga composition for each atom A
+    f1_ga : (B, N, 4) tensor of Ga fractions among NN1
+    f2_ga : (B, N, 12) tensor of Ga fractions among NN2
+
+    Returns:
+        (B, N) tensor of energies for each atom A in each batch
+    """
+
+    # Fractions of As
+    pA_as = 1 - pA_ga
+    f1_as = 1 - f1_ga
+    f2_as = 1 - f2_ga
+
+    E1 = (pA_ga * (f1_ga * params[0] + f1_as * params[1]) +
+          pA_as * (f1_ga * params[2] + f1_as * params[3]))
+    # E1 = (pA_ga * (f1_ga * params[0] + f1_as * params[3]) + #Try to make it favor Ga-As interactions more than As-Ga interactions
+    #        pA_as * (f1_ga * params[3] + f1_as * params[1]))
+
+    E2 = (pA_ga * (f2_ga * params[4] + f2_as * params[5]) +
+          pA_as * (f2_ga * params[6] + f2_as * params[7]))
+
+    return E1.sum(dim=-1) + E2.sum(dim=-1)
+
+def build_crystal_U(percent_func,batch_size, Na, dim, periodic=True, percenttype='chempotential'):
+    nbr1, nbr2 = neighbor_masks(periodic=periodic)
+
+    nbr1_tensor = torch.tensor(nbr1, dtype=torch.long).unsqueeze(0).expand(batch_size, -1, -1)  # (B, N, M1)
+    nbr2_tensor = torch.tensor(nbr2, dtype=torch.long).unsqueeze(0).expand(batch_size, -1, -1)  # (B, N, M2)
+
+    def U(r, t):
+        """
+        r: (B, Na, dim)
+        t: scalar or (B,)
+        """
+
+        dr = percent_func(r, percenttype=percenttype).unsqueeze(-1)          # (B, N, 1)
+        dr_expanded1 = dr.expand(-1, -1, nbr1_tensor.shape[1])  # (B, N, M1)
+        dr_expanded2 = dr.expand(-1, -1, nbr2_tensor.shape[1])  # (B, N, M2)
+
+        # First-shell neighbor values: (B, N, 4)
+        nbr1_vals = torch.gather(dr_expanded1, dim=1, index=nbr1_tensor)
+
+        # Second-shell neighbor values: (B, N, 12)
+        nbr2_vals = torch.gather(dr_expanded2, dim=1, index=nbr2_tensor)
+
+        return atom_energy_mixed_batched(dr, nbr1_vals, nbr2_vals).sum(1)
+
+    return U, [nbr1, nbr2]

@@ -10,8 +10,9 @@ from alchemistlib.modules import FNN
 
 import matplotlib.pyplot as plt
 
-from utils import _read_pdb_coords
-from glowblock import percentA, build_U
+from utils import _read_pdb_coords, build_crystal_U
+from glowblock import percentA
+from traintest import test_glowblock_two_part
 
 
 def _build_neighbor_pairs(neighborlist):
@@ -38,27 +39,7 @@ def _compute_interactions(last_ga_frame, first_pairs, second_pairs):
     second = _pair_interactions(*second_pairs)
     return torch.cat([first, second])
 
-# ----------------------------------------------------------------------
-# Testing GlowBlock: trajectory + PDB + histogram
-# ----------------------------------------------------------------------
-def test_glowblock_two_part(
-    glow,
-    flow=None,
-    U=None,
-    batch_size=1,
-    Na=216,
-    dim=2,
-    sigma=1.0,
-    kT=1.0,
-    periodic=True,
-    compute_loss=False,
-):
-    if flow is None:
-        flow = MultiStep(glow, 1)
-
-    if U is None:
-        U, _ = build_U(batch_size, Na, dim, periodic=periodic)
-
+def generate_sample(batch_size, Na, dim, sigma, kT=1.0):
     normal = torch.distributions.normal.Normal(0, 1)
     x = {
         'r': Q(normal.sample((batch_size, Na, dim))) * sigma,
@@ -67,17 +48,7 @@ def test_glowblock_two_part(
     }
     percent = percentA(x['r'])
     x['p'] = torch.stack([percent, 1 - percent], dim=2)
-    x0_r = x['r']
-
-    x, lJ, info = flow(x)
-    r = x['r']
-    ga_percent = percentA(r)
-
-    if not compute_loss:
-        return ga_percent, None
-
-    loss = 1 / kT * (U(r, x['t']) - U(x0_r, 0.0)) - lJ
-    return ga_percent, loss
+    return x
 
 
 # ----------------------------------------------------------------------
@@ -87,6 +58,7 @@ if __name__ == "__main__":
     coords = _read_pdb_coords()
     # print(coords)
     test_count = 50000
+    kT = 1
     scale = test_count // 5
     folder = 'glowblockenergyaltposter'
     for nn_model in glob.glob(f'{folder}/*_model_weights.pt'):
@@ -102,7 +74,7 @@ if __name__ == "__main__":
         elif '9layer' in filename:
             networkdims = [32, 32, 32, 16, 16, 16, 8, 8]
 
-        U, neighborlists = build_U(1, 216, 2, periodic=True)
+        U, neighborlists = build_crystal_U(1, 216, 2, periodic=True)
         first_pairs = _build_neighbor_pairs(neighborlists[0])
         second_pairs = _build_neighbor_pairs(neighborlists[1])
         glow = GlowBlock(dt=0.001, neighborlists=neighborlists, network_dims=networkdims, dim=2)
@@ -116,6 +88,7 @@ if __name__ == "__main__":
         last_Ga_composition = torch.empty((test_count,), dtype=torch.float32)
         sample_time_s = 0.0
         interaction_time_s = 0.0
+        loss_func = lambda x, x0, logJ: 1 / kT * (U(x['r'], x['t']) - U(x0['r'], 0.0)) - logJ
 
         with torch.no_grad():
             for i in range(test_count):
@@ -124,11 +97,14 @@ if __name__ == "__main__":
 
                 t0 = time.perf_counter()
                 Ga_percents, _ = test_glowblock_two_part(
-                    glow,
                     flow=flow,
-                    U=U,
-                    periodic=True,
+                    generate_sample=generate_sample,
+                    percent_func=percentA,
+                    loss_func=loss_func,
                     batch_size=1,
+                    Na=216,
+                    dim=2,
+                    sigma=1.0,
                     compute_loss=False,
                 )
                 t1 = time.perf_counter()

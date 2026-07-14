@@ -2,14 +2,13 @@ import math
 from pathlib import Path
 
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
 
 import matplotlib.pyplot as plt
 
 from alchemistlib.flows import simpleGlowBlock, MultiStep, Q, fix_kT
 from utils import _write_pdb_trajectory, _read_pdb_coords, clone_state
+from traintest import train_argmax_flow, test_argmax_flow
 
 # ----------------------------------------------------------------------
 # Ideal-gas categorical samples
@@ -153,124 +152,6 @@ def calc_argmax_flow_loss_ideal_gas(
 
 
 # ----------------------------------------------------------------------
-# Training
-# ----------------------------------------------------------------------
-def train_glowblock_ideal_gas_argmax(
-    batch_size=32,
-    Na=216,
-    num_classes=2,
-    p_class0=0.75,
-    sigma=1.0,
-    n_steps_flow=1,
-    num_batches=10000,
-    lr=1e-3,
-    network_dims=(32, 32),
-    device=None
-):
-    """
-    Train Argmax Flow on ideal-gas independent binary categorical variables.
-
-    No U(r), no neighbor masks, no interaction terms.
-    """
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    glow = simpleGlowBlock(
-        dt=0.001,
-        network_dims=list(network_dims),
-        dim=num_classes,
-    ).to(device)
-
-    flow = MultiStep(glow, n_steps_flow)
-
-    optimizer = optim.Adam(glow.parameters(), lr=lr)
-
-    losses = []
-
-    for it in range(num_batches):
-        x = generate_ideal_gas_sample(
-            batch_size=batch_size,
-            Na=Na,
-            num_classes=num_classes,
-            ratio=p_class0,
-            device=device,
-        )
-
-        loss, info = calc_argmax_flow_loss_ideal_gas(
-            flow=flow,
-            x=x,
-            sigma=sigma
-        )
-
-        mean_loss = loss.mean()
-
-        optimizer.zero_grad()
-        mean_loss.backward()
-        optimizer.step()
-
-        losses.append(mean_loss.item())
-
-        if (it + 1) % 50 == 0:
-            mean_log_pz = info["log_pz"].mean().item()
-            mean_log_q = info["log_q_v_given_x"].mean().item()
-            mean_log_pp = info["log_pp"].mean().item()
-            mean_log_q_p_aux = info["log_q_p_aux"].mean().item()
-
-            print(
-                f"[train] epoch {it + 1:5d} | "
-                f"loss = {mean_loss.item(): .4f} | "
-                f"log p(z) = {mean_log_pz: .4f} | "
-                f"log q(v|x) = {mean_log_q: .4f} | "
-                f"log p(p|v,x) = {mean_log_pp: .4f} | "
-                f"log q(p|v,x) = {mean_log_q_p_aux: .4f}"
-            )
-
-    return glow, losses
-
-
-# ----------------------------------------------------------------------
-# Testing / visualization
-# ----------------------------------------------------------------------
-@torch.no_grad()
-def test_glowblock_ideal_gas_argmax(
-    glow,
-    batch_size=4,
-    Na=216,
-    num_classes=2,
-    p_class0=0.75,
-    sigma=1.0,
-    n_steps_flow=1,
-    device=None
-):
-    if device is None:
-        device = next(glow.parameters()).device
-
-    flow = MultiStep(glow, n_steps_flow)
-
-    x = generate_ideal_gas_sample(
-        batch_size=batch_size,
-        Na=Na,
-        num_classes=num_classes,
-        ratio=p_class0,
-        device=device,
-    )
-
-    loss, info = calc_argmax_flow_loss_ideal_gas(
-        flow=flow,
-        x=x,
-        sigma=sigma
-    )
-
-    original = x["r"].detach().cpu()
-    lifted = torch.sigmoid(info["v"]).detach().cpu()
-    base = torch.sigmoid(info["z_r"]).detach().cpu()
-
-    frames = torch.stack([original, lifted, base], dim=0)
-
-    return frames, loss.mean().item()
-
-
-# ----------------------------------------------------------------------
 # Optional: sample from trained model
 # ----------------------------------------------------------------------
 
@@ -320,6 +201,8 @@ def sample_from_argmax_flow(
         ),
     }
 
+    z_init = clone_state(z_state)
+
     v_state, logJ, info = flow(z_state, inverse=False)
 
     v = v_state["r"]
@@ -331,6 +214,7 @@ def sample_from_argmax_flow(
         "labels": labels,
         "onehot": onehot,
         "sigmoid_v": torch.sigmoid(v),
+        "raw": torch.stack([z_init["r"], v_state["r"]], dim=0),
     }
 
 
@@ -356,27 +240,45 @@ if __name__ == "__main__":
         for num_batches in [3000]:
             for network_dims in [(),[32],(32, 32)]:
                 filename = f"{folder}/{len(network_dims) + 1}layer_num_batches{num_batches}_comp{p_class0:.2f}"
+                sigma = 1.0
 
-                glow, train_losses = train_glowblock_ideal_gas_argmax(
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                glow = simpleGlowBlock(
+                    dt=0.001,
+                    network_dims=list(network_dims),
+                    dim=num_classes,
+                ).to(device)
+                flow = MultiStep(glow, n_steps_flow)
+
+                generate_state = lambda: generate_ideal_gas_sample(
                     batch_size=batch_size,
                     Na=Na,
                     num_classes=num_classes,
-                    p_class0=p_class0,
-                    sigma=1.0,
-                    n_steps_flow=n_steps_flow,
+                    ratio=p_class0,
+                    device=device,
+                )
+                loss_func = lambda flow_obj, state: calc_argmax_flow_loss_ideal_gas(flow_obj, state, sigma)
+
+                frame_builder = lambda state, info: torch.stack([
+                    state["r"].detach().cpu(),
+                    torch.sigmoid(info["v"]).detach().cpu(),
+                    torch.sigmoid(info["z_r"]).detach().cpu(),
+                ], dim=0)
+
+                glow, train_losses = train_argmax_flow(
+                    flow=flow,
+                    model=glow,
+                    generate_state=generate_state,
+                    loss_func=loss_func,
                     num_batches=num_batches,
                     lr=1e-3,
-                    network_dims=network_dims
                 )
 
-                frames, test_loss = test_glowblock_ideal_gas_argmax(
-                    glow,
-                    batch_size=batch_size,
-                    Na=Na,
-                    num_classes=num_classes,
-                    p_class0=p_class0,
-                    sigma=1.0,
-                    n_steps_flow=n_steps_flow
+                frames, test_loss = test_argmax_flow(
+                    flow=flow,
+                    generate_state=generate_state,
+                    loss_func=loss_func,
+                    frame_builder=frame_builder,
                 )
 
                 torch.save(glow.state_dict(), f"{filename}_model_weights.pt")
