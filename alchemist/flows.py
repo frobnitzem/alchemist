@@ -38,7 +38,7 @@ class LeapFrog(nn.Module):
     def force(self, r, t):
         return -1*auto_diff(self.en, r, t)
 
-    def forward(self, x, inverse=False):
+    def forward(self, x, inverse=False, info={}):
         shape = x['p'].shape
         if inverse:
             x['r'] = x['r'] - Q(self.dt*x['p'])
@@ -81,7 +81,186 @@ class LeapFrog(nn.Module):
             x['r'] = x['r'] + Q(self.dt*x['p'])
             x['t'] = x['t'] + self.dt
 
-        return x, lJ
+        return x, lJ, {}
+
+class GlowBlock(nn.Module):
+    def __init__(self, neighborlists, dim, dt=0.001, network_dims = [16]):
+        super().__init__()
+        self.dt = dt
+        neighborlists.append(torch.arange(len(neighborlists[0])).unsqueeze(1)) # add self as neighbor to each atom
+        self.nbr = torch.hstack([torch.tensor(nl).long() for nl in neighborlists])  # (N, M, k), k is dim of each neighbor property (e.g. 3 for xyz coords)
+
+        self.step1 = self.make_net(self.nbr.shape[1]*dim, network_dims, dim)
+        self.step2 = self.make_net(self.nbr.shape[1]*dim, network_dims, dim)
+        self.step3 = self.make_net(self.nbr.shape[1]*dim, network_dims, dim)
+        self.step4 = self.make_net(self.nbr.shape[1]*dim, network_dims, dim)
+
+        self.step1.apply(self.zero_init)
+        self.step2.apply(self.zero_init)
+        self.step3.apply(self.zero_init)
+        self.step4.apply(self.zero_init)
+
+    def make_net(self, in_dim, hidden_dims, out_dim):
+        layers = []
+        dims = [in_dim] + hidden_dims + [out_dim]
+
+        for i in range(len(dims) - 1):
+            layers.append(nn.Linear(dims[i], dims[i+1]))
+            if i < len(dims) - 2:   # no ReLU after final layer
+                layers.append(nn.ReLU())
+
+        return nn.Sequential(*layers)
+
+    def zero_init(self, m):
+        if isinstance(m, nn.Linear):
+            nn.init.zeros_(m.weight)
+            nn.init.zeros_(m.bias)
+
+    def neighbor_expansion(self, r, nbr):
+        # r: (B, N, k) 
+        # nbr: [(N, M1 + M2 + 1)] indices of neighbors for each atom and itslf
+        # return: (B, N, (M1+M2+1)*k) 
+        
+        B, N, k = r.shape
+        M = nbr.shape[1]
+
+        # Expand to (B, N, M) so we have per-batch, per-atom neighbor indices
+        nbr = nbr.unsqueeze(0).expand(B, -1, -1)  # (B, N, M)
+
+        # Expand r to (B, N, M, k) so we can gather along dim=1 (the atom axis)
+        r_exp = r.unsqueeze(2).expand(-1, -1, M, -1)  # (B, N, M, k)
+
+        # Index shape must match r_exp for gather: (B, N, M, k)
+        idx = nbr.unsqueeze(-1).expand(-1, -1, -1, k)
+
+        # Gather neighbor properties and flatten the last two dims to (M*k)
+        out = torch.gather(r_exp, dim=1, index=idx)  # (B, N, M, k)
+        return out.reshape(B, N, M * k)
+
+    def st1(self, r, t):
+        #implement NN to calculate s,t fom r,t
+        s = self.step1(r).clamp(-5,5)
+        t = self.step2(r)
+        return (s,t)
+
+    def st2(self, r, t):
+        #implement NN to calculate s,t fom r,t
+        s = self.step3(r).clamp(-5,5)
+        t = self.step4(r)
+        return (s,t)
+
+
+    def forward(self, x, inverse=False, info={}):
+        if inverse:
+            s, t = self.st2(self.neighbor_expansion(x['r'], self.nbr), x['t'])
+            x['p'] = (x['p'] - t)*torch.exp(-s)
+
+            lJ = -s.sum(dim=(1,2))
+
+            s, t = self.st1(self.neighbor_expansion(x['p'], self.nbr), x['t'])
+            x['r'] = (x['r'] - t)*torch.exp(-s)
+
+            x['t'] = x['t'] - self.dt
+            lJ += -s.sum(dim=(1,2))
+        else:
+            s, t = self.st1(self.neighbor_expansion(x['p'], self.nbr), x['t'])
+            x['r'] = x['r']*torch.exp(s) + t
+            # print(x['r'])
+
+            lJ = s.sum(dim=(1,2))
+
+            s, t = self.st2(self.neighbor_expansion(x['r'], self.nbr), x['t'])
+            x['p'] = x['p']*torch.exp(s) + t
+
+            x['t'] = x['t'] + self.dt
+            lJ += s.sum(dim=(1,2))
+
+        return x, lJ, {}
+
+class simpleGlowBlock(nn.Module):
+    def __init__(self, dim, dt=0.001, network_dims = [16]):
+        super().__init__()
+        self.dt = dt
+
+        self.step1 = self.make_net(dim, network_dims, dim)
+        self.step2 = self.make_net(dim, network_dims, dim)
+        self.step3 = self.make_net(dim, network_dims, dim)
+        self.step4 = self.make_net(dim, network_dims, dim)
+
+        self.initialize_coupling_net(self.step1)
+        self.initialize_coupling_net(self.step2)
+        self.initialize_coupling_net(self.step3)
+        self.initialize_coupling_net(self.step4)
+
+    def make_net(self, in_dim, hidden_dims, out_dim):
+        layers = []
+        dims = [in_dim] + hidden_dims + [out_dim]
+
+        for i in range(len(dims) - 1):
+            layers.append(nn.Linear(dims[i], dims[i+1]))
+            if i < len(dims) - 2:   # no ReLU after final layer
+                layers.append(nn.ReLU())
+
+        return nn.Sequential(*layers)
+
+    # def zero_init(self, m):
+    #     if isinstance(m, nn.Linear):
+    #         nn.init.zeros_(m.weight)
+    #         nn.init.zeros_(m.bias)
+
+    def initialize_coupling_net(self, net: nn.Sequential) -> None:
+        linear_layers = [
+            module for module in net.modules()
+            if isinstance(module, nn.Linear)
+        ]
+
+        for layer in linear_layers:
+            nn.init.kaiming_uniform_(layer.weight, nonlinearity="relu")
+            nn.init.zeros_(layer.bias)
+
+        # Zero only the final output layer.
+        nn.init.zeros_(linear_layers[-1].weight)
+        nn.init.zeros_(linear_layers[-1].bias)
+
+    def st1(self, r, t):
+        #implement NN to calculate s,t fom r,t
+        s = self.step1(r).clamp(-5,5)
+        t = self.step2(r)
+        return (s,t)
+
+    def st2(self, r, t):
+        #implement NN to calculate s,t fom r,t
+        s = self.step3(r).clamp(-5,5)
+        t = self.step4(r)
+        return (s,t)
+
+
+    def forward(self, x, inverse=False, info={}):
+        if inverse:
+            s, t = self.st2(x['r'], x['t'])
+            x['p'] = (x['p'] - t)*torch.exp(-s)
+
+            lJ = -s.sum(dim=(1,2))
+
+            s, t = self.st1(x['p'], x['t'])
+            x['r'] = (x['r'] - t)*torch.exp(-s)
+
+            x['t'] = x['t'] - self.dt
+            lJ += -s.sum(dim=(1,2))
+        else:
+            s, t = self.st1(x['p'], x['t'])
+            x['r'] = x['r']*torch.exp(s) + t
+            # print(x['r'])
+
+            lJ = s.sum(dim=(1,2))
+
+            s, t = self.st2(x['r'], x['t'])
+            x['p'] = x['p']*torch.exp(s) + t
+
+            x['t'] = x['t'] + self.dt
+            lJ += s.sum(dim=(1,2))
+
+        return x, lJ, {}
 
 class Brownian(nn.Module):
     def __init__(self, en, sigma, beta):

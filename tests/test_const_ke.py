@@ -35,8 +35,9 @@ def test_ham_change(batch_size=2, Na=1000, dim=3, slope=3.0,
     r2 = (r*r).sum((-2,-1))/Ndof
     p2 = (p*p).sum((-2,-1))/Ndof
     print( r2, p2, logJ )
+    info = {}
     for i in range(100):
-        x, lJ = leap(x)
+        x, lJ, info = leap(x, info=info)
         logJ += lJ
         r = x['r']
         p = x['p']

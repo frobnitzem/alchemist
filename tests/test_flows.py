@@ -1,8 +1,19 @@
 import pytest
 import torch
+from torch import nn
 
 from alchemist.flows import LeapFrog, Q, fix_kT
 from alchemist.modules import FNN
+
+class ReshapeOut(nn.Module):
+    def __init__(self, fn, sh):
+        super().__init__()
+        self.fn = fn
+        self.sh = sh
+    def forward(self, x, *args):
+        return self.fn(x, *args).reshape(self.sh)
+    def diff(self, x, *args):
+        return self.fn.diff(x, *args)
 
 @pytest.mark.parametrize("dim", [
         (3),
@@ -13,7 +24,7 @@ def test_diff(dim, t=0.0):
     # TODO: use torch.gradcheck
     # 
     r = torch.rand((4, dim), requires_grad=True)
-    N = FNN(dim)
+    N = ReshapeOut(FNN(dim), (-1,))
     E = N(r, t)
     dE = N.diff(r, t)
     print(dE)
@@ -29,7 +40,7 @@ def test_diff(dim, t=0.0):
         (10, 128),
     ])
 def test_reverse(dim, batch_size):
-    leap = LeapFrog( FNN(dim) )
+    leap = LeapFrog( ReshapeOut(FNN(dim), (-1,)) )
 
     normal = torch.distributions.normal.Normal(0, 1)
     def gen():
@@ -42,11 +53,13 @@ def test_reverse(dim, batch_size):
     x0 = x['r']
     print(x0)
     logJ = 0.0
+    info = {}
     for i in range(10):
-        x, lJ = leap(x)
+        x, lJ, info = leap(x, info=info)
         logJ += lJ
+    info = {}
     for i in range(10):
-        x, lJ = leap(x, inverse=True)
+        x, lJ, info = leap(x, inverse=True, info=info)
         logJ += lJ
     print(x['r'])
     print(x['t'])
@@ -73,11 +86,13 @@ def test_const_ke(batch_size=2, Na=4):
     x0 = x['r']
     print(x0)
     logJ = 0.0
+    info = {}
     for i in range(10):
-        x, lJ = leap(x)
+        x, lJ, info = leap(x, info=info)
         logJ += lJ
+    info = {}
     for i in range(10):
-        x, lJ = leap(x, inverse=True)
+        x, lJ, info = leap(x, inverse=True, info=info)
         logJ += lJ
     print(x['r'])
     print(x['t'])

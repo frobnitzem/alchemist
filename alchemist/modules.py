@@ -9,7 +9,7 @@ def auto_diff(fn, x, *args, return_E=False):
     x should have shape (batch, ...)
     E should have shape (batch,)
     """
-    #x = x.detach().clone().requires_grad_(True)
+    x = x.detach().clone().requires_grad_(True)
     #x.requires_grad_(True)
     E = fn(x, *args)
     assert E.shape == x.shape[:1]
