@@ -25,7 +25,8 @@ N_STEPS_FLOW = 10
 
 # Energy Parameters
 MU = torch.zeros(DIM, dtype=torch.float32)
-E1 = torch.eye(DIM, dtype=torch.float32) * 0.1
+# E1 = torch.eye(DIM, dtype=torch.float32) * 0.1
+E1 = 0.1 * (1 - torch.eye(DIM, dtype=torch.float32))
 E2 = torch.eye(DIM, dtype=torch.float32) * 0
 
 def percentA(r):
