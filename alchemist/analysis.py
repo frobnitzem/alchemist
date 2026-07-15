@@ -85,36 +85,24 @@ def compute_energy_parameterized(
     # p_a: (B, N, D)
     p_a = p[..., 0, :]
     
-    # p1_ab: (B, N, 4, D, D) - outer product of center and neighbor
+    # Neighbors
     p1 = p[..., 1:5, :] # (B, N, 4, D)
-    p1_ab = torch.einsum('bnd, bnm -> bndm', p_a, p1)
-    
-    # p2_ab: (B, N, 12, D, D)
     p2 = p[..., 5:17, :] # (B, N, 12, D)
-    p2_ab = torch.einsum('bnd, bnm -> bndm', p_a, p2)
     
-    # Energy = dot(p_a, mu) + sum(dot(p1_ab, E1)) + sum(dot(p2_ab, E2))
-    # dot(p_a, mu) -> (B, N)
-    term_mu = torch.matmul(p_a, mu)
+    # Energy = dot(p_a, mu) + sum(p_a^T @ E1 @ p_neighbor) + sum(p_a^T @ E2 @ p_neighbor)
     
-    # dot(p1_ab, E1) -> (B, N, 4)
-    # p1_ab is (B, N, 4, D, D), E1 is (D, D)
-    # We want the Frobenius inner product for each neighbor: sum_{i,j} p1_ab[i,j] * E1[i,j]
-    term_e1 = torch.einsum('bndm, dm -> bn', p1_ab, E1) # This is wrong, E1 is (D,D)
-    # Correct: sum over D,D for each neighbor m
-    term_e1 = torch.einsum('bndm, dm -> bn', p1_ab, E1) # Still wrong.
+    # term_mu: (B, N)
+    # p_a is (B, N, D), mu is (D,)
+    # Use einsum to ensure we contract over D regardless of B=1
+    term_mu = torch.einsum('bnd, d -> bn', p_a, mu)
     
-    # Let's use a simpler contraction:
-    # For each neighbor m: sum_{i,j} p_a[i] * p_neighbor[j] * E1[i,j]
-    # This is p_a^T @ E1 @ p_neighbor
-    # p_a: (B, N, D), E1: (D, D), p1: (B, N, 4, D)
-    
-    # (B, N, D) @ (D, D) -> (B, N, D)
+    # term_e1: (B, N, 4)
+    # p_a @ E1 -> (B, N, D)
     p_a_E1 = torch.matmul(p_a, E1) 
-    # (B, N, D) * (B, N, 4, D) -> sum over D -> (B, N, 4)
+    # sum over D: (B, N, D) * (B, N, 4, D) -> (B, N, 4)
     term_e1 = torch.sum(p_a_E1.unsqueeze(2) * p1, dim=-1)
     
-    # Same for E2
+    # term_e2: (B, N, 12)
     p_a_E2 = torch.matmul(p_a, E2)
     term_e2 = torch.sum(p_a_E2.unsqueeze(2) * p2, dim=-1)
     

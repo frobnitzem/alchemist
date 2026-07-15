@@ -1,0 +1,32 @@
+# Future Development Roadmap for Alchemist
+
+## 1. Feature Development
+### A. Higher-Order Geometric Descriptors
+- Bond Angle Distributions: Capture the arrangement of neighbors, not just their identity.
+- Local Density/Coordination: Describe local packing fractions and deviations from ideal lattice coordination.
+- Multi-Species Support: Generalize composition features for ternary or quaternary alloys.
+
+### B. Model Architecture Evolutions
+- Attention-Based Aggregation: Replace simple sums with Graph Attention Network (GAT) layers to learn neighbor importance.
+- Equivariant Layers: Implement E(3)-equivariant architectures to ensure rotation invariance.
+- Adaptive Step-Sizing: Implement learned dt or sophisticated ODE solvers for the flow.
+
+### C. Experimentation Framework
+- Active Learning Loop: Identify high-variance regions in energy predictions to target for high-fidelity (DFT) data acquisition.
+
+## 2. Scientific Hypotheses to Test
+### Hypothesis 1: Local Environment Sufficiency
+- Question: Is the 17-atom neighborhood (self + 4 NN1 + 12 NN2) sufficient for the energy landscape?
+- Test: Compare energy prediction variance using only NN1 vs. NN1+NN2.
+
+### Hypothesis 2: Compositional Correlation
+- Question: Does the model capture clustering tendencies (e.g., Ga-As preference)?
+- Test: Compare generated sum_neighbor_features statistics against known stable crystal structures.
+
+### Hypothesis 3: Flow Depth vs. Sample Quality
+- Question: Does increasing MultiStep iterations linearly improve distribution matching?
+- Test: Evaluate statistics across a range of n_steps_flow (5, 10, 20, 50).
+
+### Hypothesis 4: Sensitivity to Box Constraints
+- Question: How does the model handle strain?
+- Test: Vary the box size (compression/expansion) and observe shifts in generated neighbor features.

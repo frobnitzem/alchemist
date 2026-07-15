@@ -24,9 +24,9 @@ TRAIN_ITERS = 25
 N_STEPS_FLOW = 10
 
 # Energy Parameters
-MU = torch.zeros(DIM)
-E1 = torch.eye(DIM) * 0.1
-E2 = torch.eye(DIM) * 0.05
+MU = torch.zeros(DIM, dtype=torch.float32)
+E1 = torch.eye(DIM, dtype=torch.float32) * 0.1
+E2 = torch.eye(DIM, dtype=torch.float32) * 0.05
 
 def percentA(r):
     dr = r[:, :, 1] - r[:, :, 0]
@@ -62,14 +62,25 @@ def main():
             logJ = logJ + lJ
         
         # Simple energy for training (using parameterized version for consistency)
+        # dr must be (B, N, D) for compute_energy_parameterized
         dr = percentA(x['r']).unsqueeze(-1)
-        assembled = assemble_neighbor_features(dr, neighborlists)
+        # If B=1, dr is (1, N, 1). We need (B, N, D) where D=2.
+        # The current percentA returns (B, N). unsqueeze(-1) makes it (B, N, 1).
+        # But the energy function expects D=2 (Ga, As).
+        
+        # Correct dr to be (B, N, 2)
+        p_x = percentA(x['r'])
+        dr_full = torch.stack([p_x, 1 - p_x], dim=-1) # (B, N, 2)
+        assembled = assemble_neighbor_features(dr_full, neighborlists)
         energy = compute_energy_parameterized(assembled, MU, E1, E2)
         
-        dr0 = percentA(x0['r']).unsqueeze(-1)
-        assembled0 = assemble_neighbor_features(dr0, neighborlists)
+        p_x0 = percentA(x0['r'])
+        dr0_full = torch.stack([p_x0, 1 - p_x0], dim=-1) # (B, N, 2)
+        assembled0 = assemble_neighbor_features(dr0_full, neighborlists)
         energy0 = compute_energy_parameterized(assembled0, MU, E1, E2)
         
+        # energy is (B, N), energy.sum(1) is (B,)
+        # logJ is (B,)
         loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) - logJ
         return loss.mean()
 
@@ -108,8 +119,9 @@ def main():
             for _ in range(N_STEPS_FLOW):
                 x, _, _ = flow(x)
             
-            dr = percentA(x['r']).unsqueeze(-1)
-            feat = assemble_neighbor_features(dr, neighborlists)
+            p_final = percentA(x['r'])
+            dr_full = torch.stack([p_final, 1 - p_final], dim=-1) # (1, N, 2)
+            feat = assemble_neighbor_features(dr_full, neighborlists)
             samples_features.append(feat)
             samples_r.append(x['r'])
 
@@ -133,15 +145,20 @@ def main():
     # Plot 2: Energy Analysis
     per_atom_energy = compute_energy_parameterized(all_feat, MU, E1, E2) # (B, N)
     B, N = per_atom_energy.shape
+    
+    # Get p_a for all atoms: (B, N, 17, D) -> (B, N, D) -> (B, N)
+    # We take the first slot (self) and the first component (p_a)
+    p_a_all = torch.softmax(all_feat, dim=-1)[..., 0, 0]
+    
     flat_energy = per_atom_energy.flatten()
-    atom_indices = torch.arange(B * N).float()
+    flat_p_a = p_a_all.flatten()
     
     fig2, axes2 = plt.subplots(2, 2, figsize=(12, 10))
     
-    # (0,0) 2D Histogram: Atom Index vs Energy
-    axes2[0,0].hist2d(atom_indices.numpy(), flat_energy.numpy(), bins=30)
-    axes2[0,0].set_title("Energy vs Atom Index")
-    axes2[0,0].set_xlabel("Atom Index")
+    # (0,0) 2D Histogram: p_a vs Energy
+    axes2[0,0].hist2d(flat_p_a.numpy(), flat_energy.numpy(), bins=30)
+    axes2[0,0].set_title("Energy vs Composition (p_a)")
+    axes2[0,0].set_xlabel("p_a")
     axes2[0,0].set_ylabel("Energy")
     
     # (0,1) Marginal: Energy Distribution
@@ -149,10 +166,10 @@ def main():
     axes2[0,1].set_title("Energy Marginal")
     axes2[0,1].set_xlabel("Energy")
     
-    # (1,0) Marginal: Atom Index Distribution (should be flat)
-    axes2[1,0].hist(atom_indices.numpy(), bins=30)
-    axes2[1,0].set_title("Atom Index Marginal")
-    axes2[1,0].set_xlabel("Atom Index")
+    # (1,0) Marginal: p_a Distribution
+    axes2[1,0].hist(flat_p_a.numpy(), bins=30)
+    axes2[1,0].set_title("Composition Marginal")
+    axes2[1,0].set_xlabel("p_a")
     
     axes2[1,1].axis('off') # Empty panel
     
