@@ -11,22 +11,29 @@ from alchemist.ml_utils import train_and_summarize
 _GAAS_PDB = Path(__file__).resolve().parents[1] / 'examples' / 'GaAs' / 'GaAs.pdb'
 _GAAS_BOX = torch.full((3,), 5.75 * 3)
 
-def atom_energy_mixed_batched(pA_ga, f1_ga, f2_ga):
+def atom_energy_mixed_batched(pA_ga, f1_ga, f2_ga, params = [0.3, 0.5, 0.1, 0.15, 0, 0.05]):
     """
     pA_ga : (B, N, 1) tensor of Ga composition for each atom A
     f1_ga : (B, N, 4) tensor of Ga fractions among NN1
     f2_ga : (B, N, 12) tensor of Ga fractions among NN2
+    params: list of 6 parameters for energy contributions
+        params[0]: E_AA_1 (energy contribution for A-A in shell 1)
+        params[1]: E_AB_1 (energy contribution for A-B in shell 1)
+        params[2]: E_BB_1 (energy contribution for B-B in shell 1)
+        params[3]: E_AA_2 (energy contribution for A-A in shell 2)
+        params[4]: E_AB_2 (energy contribution for A-B in shell 2)
+        params[5]: E_BB_2 (energy contribution for B-B in shell 2)
     Returns: (B, N) tensor of energies for each atom A in each batch
     """
     pA_as = 1 - pA_ga
     f1_as = 1 - f1_ga
     f2_as = 1 - f2_ga
 
-    E1 = (pA_ga * (f1_ga * 0.3 + f1_as * 0.5) +
-          pA_as * (f1_ga * 0.5 + f1_as * 0.1))
+    E1 = (pA_ga * (f1_ga * params[0] + f1_as * params[1]) +
+          pA_as * (f1_ga * params[1] + f1_as * params[2]))
 
-    E2 = (pA_ga * (f2_ga * 0.15 + f2_as * 0.0) +
-          pA_as * (f2_ga * 0.0 + f2_as * 0.05))
+    E2 = (pA_ga * (f2_ga * params[3] + f2_as * params[4]) +
+          pA_as * (f2_ga * params[4] + f2_as * params[5]))
 
     return E1.sum(dim=-1) + E2.sum(dim=-1)
 

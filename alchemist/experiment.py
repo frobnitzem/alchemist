@@ -26,7 +26,7 @@ N_STEPS_FLOW = 10
 # Energy Parameters
 MU = torch.zeros(DIM, dtype=torch.float32)
 E1 = torch.eye(DIM, dtype=torch.float32) * 0.1
-E2 = torch.eye(DIM, dtype=torch.float32) * 0.05
+E2 = torch.eye(DIM, dtype=torch.float32) * 0
 
 def percentA(r):
     dr = r[:, :, 1] - r[:, :, 0]
@@ -53,31 +53,19 @@ def main():
             x['p'] = torch.stack([p, 1 - p], dim=2)
             yield x
 
-    def loss_fn(batch):
+    def loss_fn(batch): #KL divergence loss
         x0 = batch.copy()
         x = batch.copy()
         logJ = 0.0
-        for _ in range(2):
+        for _ in range(1):
             x, lJ, info = flow(x)
             logJ = logJ + lJ
         
-        # Simple energy for training (using parameterized version for consistency)
-        # dr must be (B, N, D) for compute_energy_parameterized
-        dr = percentA(x['r']).unsqueeze(-1)
-        # If B=1, dr is (1, N, 1). We need (B, N, D) where D=2.
-        # The current percentA returns (B, N). unsqueeze(-1) makes it (B, N, 1).
-        # But the energy function expects D=2 (Ga, As).
-        
-        # Correct dr to be (B, N, 2)
-        p_x = percentA(x['r'])
-        dr_full = torch.stack([p_x, 1 - p_x], dim=-1) # (B, N, 2)
-        assembled = assemble_neighbor_features(dr_full, neighborlists)
+        assembled = assemble_neighbor_features(x['r'], neighborlists)
         energy = compute_energy_parameterized(assembled, MU, E1, E2)
         
-        p_x0 = percentA(x0['r'])
-        dr0_full = torch.stack([p_x0, 1 - p_x0], dim=-1) # (B, N, 2)
-        assembled0 = assemble_neighbor_features(dr0_full, neighborlists)
-        energy0 = compute_energy_parameterized(assembled0, MU, E1, E2)
+        assembled0 = assemble_neighbor_features(x0['r'], neighborlists)
+        energy0 = compute_energy_parameterized(assembled0, MU, E1, E2) #compute_energy_parameterized has a softmax in it
         
         # energy is (B, N), energy.sum(1) is (B,)
         # logJ is (B,)
@@ -119,9 +107,7 @@ def main():
             for _ in range(N_STEPS_FLOW):
                 x, _, _ = flow(x)
             
-            p_final = percentA(x['r'])
-            dr_full = torch.stack([p_final, 1 - p_final], dim=-1) # (1, N, 2)
-            feat = assemble_neighbor_features(dr_full, neighborlists)
+            feat = assemble_neighbor_features(x['r'], neighborlists)
             samples_features.append(feat)
             samples_r.append(x['r'])
 
