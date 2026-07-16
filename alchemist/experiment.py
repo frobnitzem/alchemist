@@ -20,27 +20,28 @@ DIM = 2
 SIGMA = 1.0
 KT = 1.0
 LR = 1e-3
-TRAIN_ITERS = 25
+TRAIN_ITERS = 10
 N_STEPS_FLOW = 10
+EPOCHS = 100
+HIDDEN_DIMS = [32]
+output_dir = 'outputs/original_GaAs'
 
 # Energy Parameters
 MU = torch.zeros(DIM, dtype=torch.float32)
-# E1 = torch.eye(DIM, dtype=torch.float32) * 0.1
-E1 = 0.1 * (1 - torch.eye(DIM, dtype=torch.float32))
-E2 = torch.eye(DIM, dtype=torch.float32) * 0
-
-def percentA(r):
-    dr = r[:, :, 1] - r[:, :, 0]
-    return torch.sigmoid(dr)
+E1 = torch.tensor([[0.3,0.5],[0.5,0.1]], dtype=torch.float32)
+E2 = torch.tensor([[0.15,0],[0,0.05]], dtype=torch.float32)
 
 def main():
     # 1. Setup Geometry
     coords = read_pdb_coords(PDB_PATH)
     masks = compute_neighbor_masks(coords, BOX, CUTS)
     neighborlists = get_neighbor_indices(masks)
-    
+
+    def data_expansion(r):
+        return assemble_neighbor_features(r, neighborlists).reshape(r.shape[0], r.shape[1], -1)
+        
     # 2. Model Setup
-    glow = GlowBlock(neighborlists=neighborlists, dim=DIM, dt=0.001)
+    glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=HIDDEN_DIMS, data_size = 17, data_expansion=data_expansion)
     flow = MultiStep(glow, N_STEPS_FLOW)
     optimizer = optim.Adam(glow.parameters(), lr=LR)
     
@@ -49,18 +50,14 @@ def main():
     
     def data_gen():
         while True:
-            x = {'r': Q(normal.sample((BATCH_SIZE, NA, DIM))) * SIGMA, 't': 0.0}
-            p = percentA(x['r'])
-            x['p'] = torch.stack([p, 1 - p], dim=2)
+            x = {
+                'r': Q(normal.sample((BATCH_SIZE, NA, DIM))) * SIGMA, 
+                'p': Q(normal.sample((BATCH_SIZE, NA, DIM))),
+                't': 0.0
+                }
             yield x
 
-    def loss_fn(batch): #KL divergence loss
-        x0 = batch.copy()
-        x = batch.copy()
-        logJ = 0.0
-        for _ in range(1):
-            x, lJ, info = flow(x)
-            logJ = logJ + lJ
+    def loss_fn(x0,x,logJ): #KL divergence loss
         
         assembled = assemble_neighbor_features(x['r'], neighborlists)
         energy = compute_energy_parameterized(assembled, MU, E1, E2)
@@ -73,25 +70,31 @@ def main():
         loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) - logJ
         return loss.mean()
 
-    def feature_extractor(model, batch):
-        x = batch.copy()
-        for _ in range(N_STEPS_FLOW):
-            x, _, _ = model(x)
-        dr = percentA(x['r']).unsqueeze(-1)
-        return assemble_neighbor_features(dr, neighborlists)
+    def feature_extractor(x):
+        B, N, D = x['r'].shape
+        percents = torch.softmax(x['r'], dim=-1) # (B, N, D)
+        neighbor_percents = assemble_neighbor_features(x['r'], neighborlists) # (B, N, 17, D)
+        # create semi covariance matrix: (B, N, D, D) of p_a * p_a first neighbors
+        p_a = neighbor_percents[..., 0,:] # (B, N, D)
+        p_a_neighbors = neighbor_percents[..., 1:5, :] # (B, N, 4, D)
+        # Compute covariance: (B, N, D, D)
+        cov = torch.einsum('bni,bnxj->ij', p_a, p_a_neighbors)/(B*N)
+        return cov
 
     # 4. Train and Summarize
     print("Starting training...")
-    flow, mean, var = train_and_summarize(
+    means, vars, losses = train_and_summarize(
         model=flow,
         loss_fn=loss_fn,
         data_generator=data_gen,
         optimizer=optimizer,
-        epochs=2,
+        epochs=EPOCHS,
         batches_per_epoch=TRAIN_ITERS - 1,
         feature_extractor=feature_extractor
     )
     print("Training complete.")
+
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # 5. Final Sampling and Analysis
     num_samples = 100
@@ -101,12 +104,13 @@ def main():
     flow.eval()
     with torch.no_grad():
         for _ in range(num_samples):
-            x = {'r': Q(normal.sample((1, NA, DIM))) * SIGMA, 't': 0.0}
-            p = percentA(x['r'])
-            x['p'] = torch.stack([p, 1 - p], dim=2)
+            x = {
+                'r': Q(normal.sample((1, NA, DIM))) * SIGMA, 
+                'p': Q(normal.sample((1, NA, DIM))),
+                't': 0.0
+                }
             
-            for _ in range(N_STEPS_FLOW):
-                x, _, _ = flow(x)
+            x, _, _ = flow(x)
             
             feat = assemble_neighbor_features(x['r'], neighborlists)
             samples_features.append(feat)
@@ -127,7 +131,7 @@ def main():
     axes1[1].set_title("NN2 Composition Histogram")
     axes1[1].set_xlabel("Neighbor p_a")
     axes1[1].set_ylabel("Center p_a")
-    plt.savefig('neighbor_histograms.png')
+    plt.savefig(f'{output_dir}/neighbor_histograms.png')
     
     # Plot 2: Energy Analysis
     per_atom_energy = compute_energy_parameterized(all_feat, MU, E1, E2) # (B, N)
@@ -161,14 +165,49 @@ def main():
     axes2[1,1].axis('off') # Empty panel
     
     plt.tight_layout()
-    plt.savefig('energy_analysis.png')
+    plt.savefig(f'{output_dir}/energy_analysis.png')
+
+    # Plot 3: Loss Analysis
+    fig3, axes3 = plt.subplots(1, 1, figsize=(12, 5))
+    axes3.plot(losses)
+    axes3.set_title("Training Loss")
+    axes3.set_xlabel("Batch")
+    axes3.set_ylabel("Loss")
+    plt.savefig(f'{output_dir}/ loss_analysis.png')
 
     # 6. Save Trajectory
     # We need Ga percents for the PDB writer
-    ga_percents = percentA(torch.cat(samples_r, dim=0)) # (B*1, N)
-    as_percents = 1 - ga_percents
-    write_pdb_trajectory(Path('generated_samples.pdb'), coords, ga_percents, as_percents)
-    print("Results saved to neighbor_histograms.png, energy_analysis.png, and generated_samples.pdb")
+    percents = torch.softmax(torch.cat(samples_r, dim=0), dim=-1) # (B, N, D)
+    ga_percents = percents[..., 0] # (B, N)
+    as_percents = percents[..., 1] # (B, N)
+    write_pdb_trajectory(Path(f'{output_dir}/generated_samples.pdb'), coords, ga_percents, as_percents)
+
+    # 7. Save model
+    torch.save(flow.state_dict(), f'{output_dir}/trained_flow_model.pth')
+
+    # 8. Save configuration
+    config = {
+        'PDB_PATH': str(PDB_PATH),
+        'BOX': BOX.tolist(),
+        'CUTS': CUTS,
+        'BATCH_SIZE': BATCH_SIZE,
+        'NA': NA,
+        'DIM': DIM,
+        'SIGMA': SIGMA,
+        'KT': KT,
+        'LR': LR,
+        'TRAIN_ITERS': TRAIN_ITERS,
+        'N_STEPS_FLOW': N_STEPS_FLOW,
+        'EPOCHS': EPOCHS,
+        'MU': MU.tolist(),
+        'E1': E1.tolist(),
+        'E2': E2.tolist()
+    }
+    with open(f'{output_dir}/config.txt', 'w') as f:
+        for key, value in config.items():
+            f.write(f"{key}: {value}\n")
+
+    print("Results saved to output directory:", output_dir)
 
 if __name__ == "__main__":
     main()

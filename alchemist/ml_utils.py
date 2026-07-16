@@ -9,7 +9,7 @@ def train_and_summarize(
     epochs: int,
     batches_per_epoch: int,
     feature_extractor: Callable[[torch.nn.Module, Any], torch.Tensor],
-) -> Tuple[torch.nn.Module, torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.nn.Module, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Standardized training loop that optimizes a model and summarizes the 
     statistical properties of a feature extractor over the final epoch.
@@ -25,8 +25,11 @@ def train_and_summarize(
                            the features to summarize (B, M, D).
 
     Returns:
-        Trained model, mean of features (M, D), and variance of features (M, D).
+        Trained model, mean of features (M, D), variance of features (M, D), and loss values.
     """
+    means = []
+    vars = []
+    losses = []
     for epoch in range(epochs):
         # Final epoch is for evaluation (no parameter updates)
         is_eval = (epoch == epochs - 1)
@@ -41,34 +44,38 @@ def train_and_summarize(
         gen = data_generator()
         for _ in range(batches_per_epoch):
             try:
-                batch = next(gen)
+                x0 = next(gen)
             except StopIteration:
                 break
 
             if not is_eval:
                 optimizer.zero_grad()
-                loss = loss_fn(batch)
-                
+
+                x, lJ, info = model(x0)
+
+                feat = feature_extractor(x)
+                all_features.append(feat)
+
+                loss = loss_fn(x0, x, lJ)
+
                 if torch.isnan(loss) or torch.isinf(loss):
                     raise RuntimeError(f"Loss is NaN/Inf at epoch {epoch}")
                 
+                losses.append(loss.mean().item())
+
                 loss.backward()
                 optimizer.step()
             else:
                 with torch.no_grad():
-                    feat = feature_extractor(model, batch)
+
+                    feat = feature_extractor(model(x0)[0])
                     all_features.append(feat)
 
-        if is_eval:
+        if True:
             # Stack all batches: (Total_B, M, D)
             stacked_features = torch.cat(all_features, dim=0)
             
-            mean = torch.mean(stacked_features, dim=0)
-            var = torch.var(stacked_features, dim=0)
+            means.append(torch.mean(stacked_features, dim=0))
+            vars.append(torch.var(stacked_features, dim=0))
             
-            if torch.isnan(mean).any() or torch.isnan(var).any():
-                raise RuntimeError("NaN detected in final feature statistics")
-            
-            return model, mean, var
-
-    raise RuntimeError("Training loop failed to reach evaluation phase")
+    return means, vars, losses

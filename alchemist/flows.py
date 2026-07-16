@@ -85,112 +85,20 @@ class LeapFrog(nn.Module):
         return x, lJ, {}
 
 class GlowBlock(nn.Module):
-    def __init__(self, neighborlists, dim, dt=0.001, network_dims = [16]):
+    def __init__(self, dim, data_expansion = lambda r: r, data_size=1, dt=0.001, hidden_dims = [16]):
         super().__init__()
         self.dt = dt
-        self.neighborlists = neighborlists
+        self.data_expansion = data_expansion
 
-        # Total neighbors = 1 (self) + sum of neighbors in each shell
-        # For GaAs: 1 + 4 + 12 = 17
-        num_neighbors = 1 + sum(nl.shape[1] for nl in neighborlists)
-
-        self.step1 = self.make_net(num_neighbors * dim, network_dims, dim)
-        self.step2 = self.make_net(num_neighbors * dim, network_dims, dim)
-        self.step3 = self.make_net(num_neighbors * dim, network_dims, dim)
-        self.step4 = self.make_net(num_neighbors * dim, network_dims, dim)
-
-        self.step1.apply(self.zero_init)
-        self.step2.apply(self.zero_init)
-        self.step3.apply(self.zero_init)
-        self.step4.apply(self.zero_init)
-
-    def make_net(self, in_dim, hidden_dims, out_dim):
-        layers = []
-        dims = [in_dim] + hidden_dims + [out_dim]
-
-        for i in range(len(dims) - 1):
-            layers.append(nn.Linear(dims[i], dims[i+1]))
-            if i < len(dims) - 2:   # no ReLU after final layer
-                layers.append(nn.ReLU())
-
-        return nn.Sequential(*layers)
-
-    def zero_init(self, m):
-        if isinstance(m, nn.Linear):
-            nn.init.zeros_(m.weight)
-            nn.init.zeros_(m.bias)
-
-    def neighbor_expansion(self, r, nbr=None):
-        # Uses the shared utility to gather features and flattens to (B,N,-1)
-        return assemble_neighbor_features(r, self.neighborlists).reshape(r.shape[0], r.shape[1], -1)
-
-    def st1(self, r, t):
-        s = self.step1(r).clamp(-5,5)
-        t = self.step2(r)
-        return (s,t)
-
-    def st2(self, r, t):
-        s = self.step3(r).clamp(-5,5)
-        t = self.step4(r)
-        return (s,t)
-
-
-    def forward(self, x, inverse=False, info={}):
-        if inverse:
-            s, t = self.st2(self.neighbor_expansion(x['r']), x['t'])
-            x['p'] = (x['p'] - t)*torch.exp(-s)
-
-            lJ = -s.sum(dim=(1,2))
-
-            s, t = self.st1(self.neighbor_expansion(x['p']), x['t'])
-            x['r'] = (x['r'] - t)*torch.exp(-s)
-
-            x['t'] = x['t'] - self.dt
-            lJ += -s.sum(dim=(1,2))
-        else:
-            s, t = self.st1(self.neighbor_expansion(x['p']), x['t'])
-            x['r'] = x['r']*torch.exp(s) + t
-
-            lJ = s.sum(dim=(1,2))
-
-            s, t = self.st2(self.neighbor_expansion(x['r']), x['t'])
-            x['p'] = x['p']*torch.exp(s) + t
-
-            x['t'] = x['t'] + self.dt
-            lJ += s.sum(dim=(1,2))
-
-        return x, lJ, {}
-
-class simpleGlowBlock(nn.Module):
-    def __init__(self, dim, dt=0.001, network_dims = [16]):
-        super().__init__()
-        self.dt = dt
-
-        self.step1 = self.make_net(dim, network_dims, dim)
-        self.step2 = self.make_net(dim, network_dims, dim)
-        self.step3 = self.make_net(dim, network_dims, dim)
-        self.step4 = self.make_net(dim, network_dims, dim)
+        self.step1 = self.make_net(data_size * dim, hidden_dims, dim)
+        self.step2 = self.make_net(data_size * dim, hidden_dims, dim)
+        self.step3 = self.make_net(data_size * dim, hidden_dims, dim)
+        self.step4 = self.make_net(data_size * dim, hidden_dims, dim)
 
         self.initialize_coupling_net(self.step1)
         self.initialize_coupling_net(self.step2)
         self.initialize_coupling_net(self.step3)
         self.initialize_coupling_net(self.step4)
-
-    def make_net(self, in_dim, hidden_dims, out_dim):
-        layers = []
-        dims = [in_dim] + hidden_dims + [out_dim]
-
-        for i in range(len(dims) - 1):
-            layers.append(nn.Linear(dims[i], dims[i+1]))
-            if i < len(dims) - 2:   # no ReLU after final layer
-                layers.append(nn.ReLU())
-
-        return nn.Sequential(*layers)
-
-    # def zero_init(self, m):
-    #     if isinstance(m, nn.Linear):
-    #         nn.init.zeros_(m.weight)
-    #         nn.init.zeros_(m.bias)
 
     def initialize_coupling_net(self, net: nn.Sequential) -> None:
         linear_layers = [
@@ -206,39 +114,46 @@ class simpleGlowBlock(nn.Module):
         nn.init.zeros_(linear_layers[-1].weight)
         nn.init.zeros_(linear_layers[-1].bias)
 
+    def make_net(self, in_dim, hidden_dims, out_dim):
+        layers = []
+        dims = [in_dim] + hidden_dims + [out_dim]
+
+        for i in range(len(dims) - 1):
+            layers.append(nn.Linear(dims[i], dims[i+1]))
+            if i < len(dims) - 2:   # no ReLU after final layer
+                layers.append(nn.ReLU())
+
+        return nn.Sequential(*layers)
+
     def st1(self, r, t):
-        #implement NN to calculate s,t fom r,t
         s = self.step1(r).clamp(-5,5)
         t = self.step2(r)
         return (s,t)
 
     def st2(self, r, t):
-        #implement NN to calculate s,t fom r,t
         s = self.step3(r).clamp(-5,5)
         t = self.step4(r)
         return (s,t)
 
-
     def forward(self, x, inverse=False, info={}):
         if inverse:
-            s, t = self.st2(x['r'], x['t'])
+            s, t = self.st2(self.data_expansion(x['r']), x['t'])
             x['p'] = (x['p'] - t)*torch.exp(-s)
 
             lJ = -s.sum(dim=(1,2))
 
-            s, t = self.st1(x['p'], x['t'])
+            s, t = self.st1(self.data_expansion(x['p']), x['t'])
             x['r'] = (x['r'] - t)*torch.exp(-s)
 
             x['t'] = x['t'] - self.dt
             lJ += -s.sum(dim=(1,2))
         else:
-            s, t = self.st1(x['p'], x['t'])
+            s, t = self.st1(self.data_expansion(x['p']), x['t'])
             x['r'] = x['r']*torch.exp(s) + t
-            # print(x['r'])
 
             lJ = s.sum(dim=(1,2))
 
-            s, t = self.st2(x['r'], x['t'])
+            s, t = self.st2(self.data_expansion(x['r']), x['t'])
             x['p'] = x['p']*torch.exp(s) + t
 
             x['t'] = x['t'] + self.dt
