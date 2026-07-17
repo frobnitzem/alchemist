@@ -1,5 +1,7 @@
-import torch
+from tkinter import X
+import torch, math
 import torch.optim as optim
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
@@ -14,22 +16,22 @@ from alchemist.analysis import compute_neighbor_histograms, compute_energy_param
 PDB_PATH = Path('examples/GaAs/GaAs.pdb')
 BOX = torch.full((3,), 5.75 * 3)
 CUTS = [2.5, 4.5]
-BATCH_SIZE = 1
+BATCH_SIZE = 10
 NA = 216
 DIM = 2
 SIGMA = 1.0
 KT = 1.0
 LR = 1e-3
 TRAIN_ITERS = 10
-N_STEPS_FLOW = 10
+N_STEPS_FLOW = 1 #10
 EPOCHS = 100
-HIDDEN_DIMS = [32]
-output_dir = 'outputs/original_GaAs'
+HIDDEN_DIMS = [2,2]#[32,32,32]
+output_dir = 'outputs/argmax_flow_experiment'
 
 # Energy Parameters
 MU = torch.zeros(DIM, dtype=torch.float32)
-E1 = torch.tensor([[0.3,0.5],[0.5,0.1]], dtype=torch.float32)
-E2 = torch.tensor([[0.15,0],[0,0.05]], dtype=torch.float32)
+E1 = torch.tensor([[-0.3,-0.5],[-0.5,-0.1]], dtype=torch.float32)
+E2 = torch.tensor([[-0.15,-0],[-0,-0.05]], dtype=torch.float32)
 
 def main():
     # 1. Setup Geometry
@@ -41,63 +43,154 @@ def main():
         return assemble_neighbor_features(r, neighborlists).reshape(r.shape[0], r.shape[1], -1)
         
     # 2. Model Setup
-    glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=HIDDEN_DIMS, data_size = 17, data_expansion=data_expansion)
+    glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=HIDDEN_DIMS)#, data_size = 17, data_expansion=data_expansion)
     flow = MultiStep(glow, N_STEPS_FLOW)
     optimizer = optim.Adam(glow.parameters(), lr=LR)
     
     # 3. Training Utilities
     normal = torch.distributions.normal.Normal(0, 1)
     
-    def data_gen():
-        while True:
-            x = {
-                'r': Q(normal.sample((BATCH_SIZE, NA, DIM))) * SIGMA, 
-                'p': Q(normal.sample((BATCH_SIZE, NA, DIM))),
-                't': 0.0
-                }
-            yield x
+    # def data_gen():
+    #     while True:
+    #         x = {
+    #             'r': Q(normal.sample((BATCH_SIZE, NA, DIM))) * SIGMA, 
+    #             'p': Q(normal.sample((BATCH_SIZE, NA, DIM))),
+    #             't': 0.0
+    #             }
+    #         yield x
 
-    def loss_fn(x0,x,logJ): #KL divergence loss
-        
-        assembled = assemble_neighbor_features(x['r'], neighborlists)
-        energy = compute_energy_parameterized(assembled, MU, E1, E2)
-        
-        assembled0 = assemble_neighbor_features(x0['r'], neighborlists)
-        energy0 = compute_energy_parameterized(assembled0, MU, E1, E2) #compute_energy_parameterized has a softmax in it
-        
-        # energy is (B, N), energy.sum(1) is (B,)
-        # logJ is (B,)
-        loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) - logJ
+    def generate_ideal_gas_sample(
+        ratio= [0.75, 0.25],
+        shuffle=True,
+    ): 
+        ratio = torch.tensor(ratio, dtype=torch.float32)
+        assert torch.sum(ratio) == 1.0, "Ratio must sum to 1."
+        assert len(ratio) == DIM
+
+        ratio = torch.tensor(ratio, dtype=torch.float32)
+
+        counts = torch.round(ratio * NA).long()
+        diff = NA - counts.sum()
+        counts[-1] += diff   # adjust last class
+
+        base_labels = torch.cat([
+            torch.full((counts[i],), i, dtype=torch.long)
+            for i in range(DIM)
+        ], dim=0)
+
+        labels = base_labels.unsqueeze(0).expand(BATCH_SIZE, NA).clone()
+
+        while True:
+            if shuffle:
+                perm = torch.rand(BATCH_SIZE, NA).argsort(dim=1)
+                labels = torch.gather(labels, dim=1, index=perm)
+            onehot = F.one_hot(labels, num_classes=DIM).float()
+
+            # Sample v ~ q(v|x) satisfying argmax(v) = x.
+            v, logq = sample_v(onehot)
+
+            # q(a | v, x) = N(0, I), chosen here to be independent.
+            # Keep the original tensor because flow mutates/replaces state entries.
+            p_aux = torch.randn_like(v)
+
+            yield {
+                "labels": labels,
+                "r": v,
+                "p": p_aux,
+                "t": torch.tensor(0.0),
+                "loss": logq
+            }
+    
+    def sample_v(x_onehot):
+        assert DIM == 2, "This helper is for binary categories only."
+
+        device = x_onehot.device
+        dtype = x_onehot.dtype
+
+        labels = x_onehot.argmax(dim=-1)  # (B, N)
+
+        # Sample u from iid standard logistic.
+        # v = logit(eps), u ~ Uniform(0, 1)
+        u = torch.rand(BATCH_SIZE, NA, DIM, device=device, dtype=dtype).clamp(1e-6, 1.0 - 1e-6)
+        v = torch.log(u) - torch.log1p(-u)
+
+        # if argmax is wrong, flip the two channels
+        wrong = v.argmax(dim=-1) != labels          # (B, N)
+        v_flipped = v.flip(dims=[-1])               # swap class 0 and 1
+        v = torch.where(wrong.unsqueeze(-1), v_flipped, v)
+
+        # log q(v|x)
+        # flip/order transform gives factor 2 per site
+        logq = (F.logsigmoid(v) + F.logsigmoid(-v)).sum(dim=[1, 2]) + NA * math.log(2.0)
+
+        return v, logq
+
+    def calc_argmax_flow_loss_ideal_gas(x0, x, logJ): #ELBO loss
+        """
+        Correct ideal-gas Argmax Flow loss.
+            ELBO = E_{v ~ q(v|x)} [log p(v) - log q(v|x)]
+        """
+
+        # Base density log p(z)
+        logpz = -0.5 * math.log(2.0 * math.pi * SIGMA ** 2) - 0.5 * (x["r"] / SIGMA) ** 2
+        logpz = logpz.sum(dim=[1, 2])
+
+        logpp = -0.5 * math.log(2.0 * math.pi * SIGMA ** 2) - 0.5 * (x['p'] / SIGMA) ** 2
+        logpp = logpp.sum(dim=[1, 2])
+        logq_p_aux = -0.5 * math.log(2.0 * math.pi * SIGMA ** 2) - 0.5 * (x0['p'] / SIGMA) ** 2
+        logq_p_aux = logq_p_aux.sum(dim=[1, 2]) 
+
+        loss = -(logpz + logJ - x['loss'] - logq_p_aux + logpp)
+
+        if loss.mean() > 10000:
+            print(logpp, logq_p_aux, logpz, logJ, x['loss'])
+            # assert False, f"Loss exploded: {loss.item()}"
+
         return loss.mean()
+
+    # def loss_fn(x0,x,logJ): #KL divergence loss
+        
+    #     assembled = assemble_neighbor_features(x['r'], neighborlists)
+    #     energy = compute_energy_parameterized(assembled, MU, E1, E2)
+        
+    #     assembled0 = assemble_neighbor_features(x0['r'], neighborlists)
+    #     energy0 = compute_energy_parameterized(assembled0, MU, E1, E2) #compute_energy_parameterized has a softmax in it
+        
+    #     # energy is (B, N), energy.sum(1) is (B,)
+    #     # logJ is (B,)
+    #     loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) - logJ
+    #     return loss.mean()
 
     def feature_extractor(x):
         B, N, D = x['r'].shape
         percents = torch.softmax(x['r'], dim=-1) # (B, N, D)
-        neighbor_percents = assemble_neighbor_features(x['r'], neighborlists) # (B, N, 17, D)
+        neighbor_percents = assemble_neighbor_features(percents, neighborlists) # (B, N, 17, D)
         # create semi covariance matrix: (B, N, D, D) of p_a * p_a first neighbors
         p_a = neighbor_percents[..., 0,:] # (B, N, D)
         p_a_neighbors = neighbor_percents[..., 1:5, :] # (B, N, 4, D)
         # Compute covariance: (B, N, D, D)
         cov = torch.einsum('bni,bnxj->ij', p_a, p_a_neighbors)/(B*N)
         return cov
+        
 
     # 4. Train and Summarize
     print("Starting training...")
     means, vars, losses = train_and_summarize(
         model=flow,
-        loss_fn=loss_fn,
-        data_generator=data_gen,
+        loss_fn=calc_argmax_flow_loss_ideal_gas,
+        data_generator=generate_ideal_gas_sample,
         optimizer=optimizer,
         epochs=EPOCHS,
         batches_per_epoch=TRAIN_ITERS - 1,
-        feature_extractor=feature_extractor
+        feature_extractor=feature_extractor,
+        inverse=True
     )
     print("Training complete.")
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # 5. Final Sampling and Analysis
-    num_samples = 100
+    num_samples = 10000
     samples_features = []
     samples_r = []
     
@@ -114,7 +207,6 @@ def main():
             
             feat = assemble_neighbor_features(x['r'], neighborlists)
             samples_features.append(feat)
-            samples_r.append(x['r'])
 
     all_feat = torch.cat(samples_features, dim=0) # (B, N, 17, D)
     
@@ -158,8 +250,9 @@ def main():
     axes2[0,1].set_xlabel("Energy")
     
     # (1,0) Marginal: p_a Distribution
+    argmax_p_a = (flat_p_a > 0.5).float()
     axes2[1,0].hist(flat_p_a.numpy(), bins=30)
-    axes2[1,0].set_title("Composition Marginal")
+    axes2[1,0].set_title(f"Composition Marginal: AVG p_a = {argmax_p_a.mean().item():.3f}")
     axes2[1,0].set_xlabel("p_a")
     
     axes2[1,1].axis('off') # Empty panel
@@ -177,9 +270,8 @@ def main():
 
     # 6. Save Trajectory
     # We need Ga percents for the PDB writer
-    percents = torch.softmax(torch.cat(samples_r, dim=0), dim=-1) # (B, N, D)
-    ga_percents = percents[..., 0] # (B, N)
-    as_percents = percents[..., 1] # (B, N)
+    ga_percents = p_a_all
+    as_percents = 1.0 - p_a_all
     write_pdb_trajectory(Path(f'{output_dir}/generated_samples.pdb'), coords, ga_percents, as_percents)
 
     # 7. Save model

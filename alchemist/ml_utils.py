@@ -9,6 +9,7 @@ def train_and_summarize(
     epochs: int,
     batches_per_epoch: int,
     feature_extractor: Callable[[torch.nn.Module, Any], torch.Tensor],
+    inverse: bool = False
 ) -> Tuple[torch.nn.Module, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Standardized training loop that optimizes a model and summarizes the 
@@ -23,6 +24,7 @@ def train_and_summarize(
         batches_per_epoch: Number of batches per epoch.
         feature_extractor: Function taking (model, batch) and returning 
                            the features to summarize (B, M, D).
+        reverse: Whether to train in reverse direction.
 
     Returns:
         Trained model, mean of features (M, D), variance of features (M, D), and loss values.
@@ -51,7 +53,7 @@ def train_and_summarize(
             if not is_eval:
                 optimizer.zero_grad()
 
-                x, lJ, info = model(x0)
+                x, lJ, info = model(x0, inverse=inverse)
 
                 feat = feature_extractor(x)
                 all_features.append(feat)
@@ -68,7 +70,7 @@ def train_and_summarize(
             else:
                 with torch.no_grad():
 
-                    feat = feature_extractor(model(x0)[0])
+                    feat = feature_extractor(model(x0, inverse=inverse)[0])
                     all_features.append(feat)
 
         if True:
