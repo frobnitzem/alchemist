@@ -214,3 +214,37 @@ class MultiStep(nn.Module):
             x, lJ, info = self.step(x, inverse=inverse, info=info)
             logJ += lJ
         return x, logJ, info
+
+class glow_and_verlet_block(nn.Module):
+    def __init__(self, dim, data_expansion = lambda r: r, data_size=1, dt=0.001, hidden_dims = [16]):
+        super().__init__()
+        self.glow = GlowBlock(dim, data_expansion=data_expansion, data_size=data_size, dt=0, hidden_dims=hidden_dims)
+        self.verlet = LeapFrog(self.glow, dt=dt)
+
+    def forward(self, x, inverse=False, info={}):
+        #assume x['r'] is structured as dim chemical identities then +3 for coordinates
+        #only update the coordinates in verlet, only update the chemical identities in glow
+        x_coord  = {
+            'r': x['r'][..., -3:],
+            'p': x['p'][..., -3:],
+            't': x['t']
+        }
+        x_chem = {
+            'r': x['r'][..., :-3],
+            'p': x['p'][..., :-3],
+            't': x['t']
+        }
+        if inverse:
+            x_coord, lJ1, info = self.verlet(x_coord, inverse=inverse, info=info)
+            x_chem, lJ2, info = self.glow(x_chem, inverse=inverse, info=info)
+            lJ = lJ1 + lJ2
+        else:
+            x_chem, lJ1, info = self.glow(x_chem, inverse=inverse, info=info)
+            x_coord, lJ2, info = self.verlet(x_coord, inverse=inverse, info=info)
+            lJ = lJ1 + lJ2
+        x = {
+            'r': torch.cat([x_chem['r'], x_coord['r']], dim=-1),
+            'p': torch.cat([x_chem['p'], x_coord['p']], dim=-1),
+            't': x_coord['t']
+        }
+        return x, lJ, info
