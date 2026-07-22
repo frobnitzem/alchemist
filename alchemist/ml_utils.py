@@ -33,6 +33,7 @@ def train_and_summarize(
     vars = []
     losses = []
     for epoch in range(epochs):
+        print(f"Epoch {epoch+1}/{epochs}")
         # Final epoch is for evaluation (no parameter updates)
         is_eval = (epoch == epochs - 1)
         
@@ -64,6 +65,9 @@ def train_and_summarize(
                     raise RuntimeError(f"Loss is NaN/Inf at epoch {epoch}")
                 
                 losses.append(loss.mean().item())
+                # if losses[-1] > 1e6:
+                #     print(x0)
+                #     raise RuntimeError(f"Loss is too large at epoch {epoch}: {losses[-1]}")
 
                 loss.backward()
                 optimizer.step()

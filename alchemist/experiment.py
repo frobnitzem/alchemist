@@ -23,10 +23,10 @@ SIGMA = 1.0
 KT = 1.0
 LR = 1e-3
 TRAIN_ITERS = 10
-N_STEPS_FLOW = 1 #10
-EPOCHS = 100
-HIDDEN_DIMS = [2,2]#[32,32,32]
-output_dir = 'outputs/argmax_flow_experiment'
+N_STEPS_FLOW = 10
+EPOCHS = 20
+HIDDEN_DIMS = [3,3,3,3,3,3,3,3,3,3]
+output_dir = 'outputs/manual_results'
 
 # Energy Parameters
 MU = torch.zeros(DIM, dtype=torch.float32)
@@ -43,21 +43,43 @@ def main():
         return assemble_neighbor_features(r, neighborlists).reshape(r.shape[0], r.shape[1], -1)
         
     # 2. Model Setup
-    glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=HIDDEN_DIMS)#, data_size = 17, data_expansion=data_expansion)
+    glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=HIDDEN_DIMS, data_size = 17, data_expansion=data_expansion)
     flow = MultiStep(glow, N_STEPS_FLOW)
     optimizer = optim.Adam(glow.parameters(), lr=LR)
     
     # 3. Training Utilities
     normal = torch.distributions.normal.Normal(0, 1)
     
-    # def data_gen():
-    #     while True:
-    #         x = {
-    #             'r': Q(normal.sample((BATCH_SIZE, NA, DIM))) * SIGMA, 
-    #             'p': Q(normal.sample((BATCH_SIZE, NA, DIM))),
-    #             't': 0.0
-    #             }
-    #         yield x
+    def data_gen():
+        while True:
+            x = {
+                'r': Q(normal.sample((BATCH_SIZE, NA, DIM))) * SIGMA, 
+                'p': Q(normal.sample((BATCH_SIZE, NA, DIM))),
+                't': 0.0
+                }
+            yield x
+    
+    def data_gen_ordered(vsample = False):
+        """Generate data in a specific order."""
+        idx = (torch.arange(1, 55).repeat_interleave(4)) % 2
+        base = torch.nn.functional.one_hot(idx, num_classes=2).float() #(N, 2)
+        base = base.unsqueeze(0)
+        while True:
+            r = base.repeat(BATCH_SIZE, 1, 1) #(B, N, 2)
+            if normal.sample((1,)).item() < 0:
+                r = 1-r
+            if vsample:
+                r, logq = sample_v(r)
+            else:
+                r = r * 10
+                logq = torch.zeros(BATCH_SIZE, dtype=torch.float32)
+            x = {
+                'r': r, 
+                'p': Q(normal.sample((BATCH_SIZE, NA, DIM))),
+                't': 0.0,
+                'loss': logq
+                }
+            yield x
 
     def generate_ideal_gas_sample(
         ratio= [0.75, 0.25],
@@ -125,7 +147,7 @@ def main():
 
         return v, logq
 
-    def calc_argmax_flow_loss_ideal_gas(x0, x, logJ): #ELBO loss
+    def loss_ELBO(x0, x, logJ): #ELBO loss
         """
         Correct ideal-gas Argmax Flow loss.
             ELBO = E_{v ~ q(v|x)} [log p(v) - log q(v|x)]
@@ -142,24 +164,37 @@ def main():
 
         loss = -(logpz + logJ - x['loss'] - logq_p_aux + logpp)
 
-        if loss.mean() > 10000:
-            print(logpp, logq_p_aux, logpz, logJ, x['loss'])
-            # assert False, f"Loss exploded: {loss.item()}"
+        loss = -(logpz + logJ - x['loss'])
 
         return loss.mean()
 
-    # def loss_fn(x0,x,logJ): #KL divergence loss
+    def loss_KL(x0,x,logJ):
         
-    #     assembled = assemble_neighbor_features(x['r'], neighborlists)
-    #     energy = compute_energy_parameterized(assembled, MU, E1, E2)
+        assembled = assemble_neighbor_features(x['r'], neighborlists)
+        energy = compute_energy_parameterized(assembled, MU, E1, E2)
         
-    #     assembled0 = assemble_neighbor_features(x0['r'], neighborlists)
-    #     energy0 = compute_energy_parameterized(assembled0, MU, E1, E2) #compute_energy_parameterized has a softmax in it
+        assembled0 = assemble_neighbor_features(x0['r'], neighborlists)
+        energy0 = compute_energy_parameterized(assembled0, MU, E1, E2) #compute_energy_parameterized has a softmax in it
         
-    #     # energy is (B, N), energy.sum(1) is (B,)
-    #     # logJ is (B,)
-    #     loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) - logJ
-    #     return loss.mean()
+        # energy is (B, N), energy.sum(1) is (B,)
+        # logJ is (B,)
+        loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) - logJ
+        return loss.mean()
+
+    def loss_MLE(x0, x, logJ):
+        """
+        Maximum Likelihood Estimation (MLE) loss for reverse flow.
+        """
+        # Base density log p(z)
+        logpz = -0.5 * math.log(2.0 * math.pi * SIGMA ** 2) - 0.5 * (x["r"] / SIGMA) ** 2
+        logpz = logpz.sum(dim=[1, 2])
+
+        logpp = -0.5 * math.log(2.0 * math.pi * SIGMA ** 2) - 0.5 * (x['p'] / SIGMA) ** 2
+        logpp = logpp.sum(dim=[1, 2])
+        
+        loss = -(logpz + logJ + logpp)
+
+        return loss.mean()
 
     def feature_extractor(x):
         B, N, D = x['r'].shape
@@ -172,43 +207,63 @@ def main():
         cov = torch.einsum('bni,bnxj->ij', p_a, p_a_neighbors)/(B*N)
         return cov
         
-
-    # 4. Train and Summarize
-    print("Starting training...")
-    means, vars, losses = train_and_summarize(
-        model=flow,
-        loss_fn=calc_argmax_flow_loss_ideal_gas,
-        data_generator=generate_ideal_gas_sample,
-        optimizer=optimizer,
-        epochs=EPOCHS,
-        batches_per_epoch=TRAIN_ITERS - 1,
-        feature_extractor=feature_extractor,
-        inverse=True
-    )
-    print("Training complete.")
+    # # Initialize with initial samples to get a baseline for the features
+    # print("Starting initialization...")
+    # means, vars, losses_init = train_and_summarize(
+    #     model=flow,
+    #     loss_fn=loss_MLE,
+    #     data_generator=data_gen_ordered,
+    #     optimizer=optimizer,
+    #     epochs=EPOCHS,
+    #     batches_per_epoch=TRAIN_ITERS - 1,
+    #     feature_extractor=feature_extractor,
+    #     inverse=True
+    # )
+    # print("Initialization complete.")
+    
+    # # 4. Train and Summarize
+    # print("Starting training...")
+    # means, vars, losses_train = train_and_summarize(
+    #     model=flow,
+    #     loss_fn=loss_KL,
+    #     data_generator=data_gen,
+    #     optimizer=optimizer,
+    #     epochs=EPOCHS,
+    #     batches_per_epoch=TRAIN_ITERS - 1,
+    #     feature_extractor=feature_extractor,
+    #     inverse=False
+    # )
+    # print("Training complete.")
+    # 
+    # losses = losses_init + losses_train
+    losses = [0]
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # 5. Final Sampling and Analysis
-    num_samples = 10000
+    num_samples = 1000
     samples_features = []
-    samples_r = []
     
     flow.eval()
     with torch.no_grad():
         for _ in range(num_samples):
+            if _ % 100 == 0:
+                print(f"Generating sample {_}/{num_samples}")
             x = {
                 'r': Q(normal.sample((1, NA, DIM))) * SIGMA, 
                 'p': Q(normal.sample((1, NA, DIM))),
                 't': 0.0
                 }
             
-            x, _, _ = flow(x)
+            # x, _, _ = flow(x)
+            for i in range(N_STEPS_FLOW*2):
+                neighbor = assemble_neighbor_features(x['r'], neighborlists)
+                x['r'] = -(neighbor[:, :, 1:5, :].mean(dim=2))*2
             
             feat = assemble_neighbor_features(x['r'], neighborlists)
             samples_features.append(feat)
 
-    all_feat = torch.cat(samples_features, dim=0) # (B, N, 17, D)
+    all_feat = torch.cat(samples_features, dim=0) # (num_samples, N, 17, D)
     
     # Plot 1: Neighbor Histograms
     nn1_hist, nn2_hist = compute_neighbor_histograms(all_feat)
@@ -224,6 +279,22 @@ def main():
     axes1[1].set_xlabel("Neighbor p_a")
     axes1[1].set_ylabel("Center p_a")
     plt.savefig(f'{output_dir}/neighbor_histograms.png')
+
+    # Plot 1.1: Neighbor Histograms, input
+    gen_feat = assemble_neighbor_features(data_gen_ordered().__next__()['r'], neighborlists)
+    nn1_hist, nn2_hist = compute_neighbor_histograms(gen_feat)
+    
+    fig1, axes1 = plt.subplots(1, 2, figsize=(12, 5))
+    axes1[0].imshow(nn1_hist.numpy(), extent=[0,1,0,1], origin='lower')
+    axes1[0].set_title("NN1 Composition Histogram")
+    axes1[0].set_xlabel("Neighbor p_a")
+    axes1[0].set_ylabel("Center p_a")
+    
+    axes1[1].imshow(nn2_hist.numpy(), extent=[0,1,0,1], origin='lower')
+    axes1[1].set_title("NN2 Composition Histogram")
+    axes1[1].set_xlabel("Neighbor p_a")
+    axes1[1].set_ylabel("Center p_a")
+    plt.savefig(f'{output_dir}/neighbor_histograms_input.png')
     
     # Plot 2: Energy Analysis
     per_atom_energy = compute_energy_parameterized(all_feat, MU, E1, E2) # (B, N)
