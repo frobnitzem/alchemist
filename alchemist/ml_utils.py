@@ -1,4 +1,4 @@
-import torch
+import torch, copy
 from typing import Callable, Any, Tuple, Generator
 
 def train_and_summarize(
@@ -53,8 +53,9 @@ def train_and_summarize(
 
             if not is_eval:
                 optimizer.zero_grad()
+                x = copy.deepcopy(x0)  # Ensure original batch is not modified
 
-                x, lJ, info = model(x0, inverse=inverse)
+                x, lJ, info = model(x, inverse=inverse)
 
                 feat = feature_extractor(x)
                 all_features.append(feat)

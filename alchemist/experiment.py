@@ -20,18 +20,20 @@ BATCH_SIZE = 10
 NA = 216
 DIM = 2
 SIGMA = 1.0
-KT = 1.0
+KT = 0.005
 LR = 1e-3
 TRAIN_ITERS = 10
-N_STEPS_FLOW = 10
+N_STEPS_FLOW = 30
 EPOCHS = 20
-HIDDEN_DIMS = [256,256]
-output_dir = 'outputs/only_train_realNVP'
+HIDDEN_DIMS = [8,8,8]
+output_dir = 'outputs/only_train_realNVP_30steps_smalllayers_rescaledkT'
 
 # Energy Parameters
 MU = torch.zeros(DIM, dtype=torch.float32)
-E1 = torch.tensor([[-0.3,-0.5],[-0.5,-0.1]], dtype=torch.float32)
-E2 = torch.tensor([[-0.15,-0],[-0,-0.05]], dtype=torch.float32)
+# E1 = torch.tensor([[-0.3,-0.5],[-0.5,-0.1]], dtype=torch.float32)
+# E2 = torch.tensor([[-0.15,-0],[-0,-0.05]], dtype=torch.float32)
+E1 = torch.tensor([[-0.1,-0.5],[-0.5,-0.1]], dtype=torch.float32)
+E2 = torch.tensor([[-0.05,-0],[-0,-0.05]], dtype=torch.float32)
 
 def main():
     # 1. Setup Geometry
@@ -45,7 +47,7 @@ def main():
     # 2. Model Setup
     flow = RealNVP(DIM, NA, hidden_dims=HIDDEN_DIMS, n_layers=N_STEPS_FLOW)
     # glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=HIDDEN_DIMS, data_size = 17, data_expansion=data_expansion)
-    # flow = MultiIndependent(glow, N_STEPS_FLOW) #MultiStep(glow, N_STEPS_FLOW)
+    # flow = MultiIndependent(glow, N_STEPS_FLOW) #MultiStep(glow, N_STEPS_FLOW) #
     optimizer = optim.Adam(flow.parameters(), lr=LR)
     
     # 3. Training Utilities
@@ -187,10 +189,10 @@ def main():
         
         assembled0 = assemble_neighbor_features(x0['r'], neighborlists)
         energy0 = compute_energy_parameterized(assembled0, MU, E1, E2) #compute_energy_parameterized has a softmax in it
-        
+
         # energy is (B, N), energy.sum(1) is (B,)
         # logJ is (B,)
-        loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) #- logJ
+        loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) - logJ
         return loss.mean()
 
     def loss_MLE(x0, x, logJ):
@@ -247,7 +249,7 @@ def main():
     )
     print("Training complete.")
     
-    losses = losses_train #losses_init +
+    losses = losses_train #losses_init + 
     # losses = [0]
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -259,9 +261,13 @@ def main():
     flow.eval()
     with torch.no_grad():
         for _ in range(num_samples):
-            if _+1 % 100 == 0:
-                print(f"Generating sample {_}/{num_samples}")
-            x = data_gen_NVP().__next__()
+            if (_+1) % 100 == 0:
+                print(f"Generating sample {_+1}/{num_samples}")
+            x ={
+                'r': Q(normal.sample((2, NA, DIM))) * SIGMA,
+                'r_coord': torch.tensor(coords, dtype=torch.float32).repeat(2, 1, 1),
+                't': 0.0
+            }
             # x = {
             #     'r': Q(normal.sample((1, NA, DIM))) * SIGMA, 
             #     'p': Q(normal.sample((1, NA, DIM))),
@@ -272,11 +278,10 @@ def main():
             # for i in range(N_STEPS_FLOW*2):
             #     neighbor = assemble_neighbor_features(x['r'], neighborlists)
             #     x['r'] = -(neighbor[:, :, 1:5, :].mean(dim=2))*2
-            
             feat = assemble_neighbor_features(x['r'], neighborlists)
             samples_features.append(feat)
 
-    all_feat = torch.cat(samples_features, dim=0) # (num_samples, N, 17, D)
+    all_feat = torch.cat(samples_features, dim=0) # (num_samples*B, N, 17, D)
     
     # Plot 1: Neighbor Histograms
     nn1_hist, nn2_hist = compute_neighbor_histograms(all_feat)
