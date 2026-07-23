@@ -20,13 +20,13 @@ BATCH_SIZE = 10
 NA = 216
 DIM = 2
 SIGMA = 1.0
-KT = 1.0
+KT = 0.1
 LR = 1e-3
 TRAIN_ITERS = 10
-N_STEPS_FLOW = 10
+N_STEPS_FLOW = 20
 EPOCHS = 20
-HIDDEN_DIMS = [3,3,3,3,3,3,3,3,3,3]
-output_dir = 'outputs/manual_results'
+HIDDEN_DIMS = [32,32,32]
+output_dir = 'outputs/initialize_and_train_new'
 
 # Energy Parameters
 MU = torch.zeros(DIM, dtype=torch.float32)
@@ -207,36 +207,36 @@ def main():
         cov = torch.einsum('bni,bnxj->ij', p_a, p_a_neighbors)/(B*N)
         return cov
         
-    # # Initialize with initial samples to get a baseline for the features
-    # print("Starting initialization...")
-    # means, vars, losses_init = train_and_summarize(
-    #     model=flow,
-    #     loss_fn=loss_MLE,
-    #     data_generator=data_gen_ordered,
-    #     optimizer=optimizer,
-    #     epochs=EPOCHS,
-    #     batches_per_epoch=TRAIN_ITERS - 1,
-    #     feature_extractor=feature_extractor,
-    #     inverse=True
-    # )
-    # print("Initialization complete.")
+    # Initialize with initial samples to get a baseline for the features
+    print("Starting initialization...")
+    means, vars, losses_init = train_and_summarize(
+        model=flow,
+        loss_fn=loss_MLE,
+        data_generator=data_gen_ordered,
+        optimizer=optimizer,
+        epochs=EPOCHS,
+        batches_per_epoch=TRAIN_ITERS - 1,
+        feature_extractor=feature_extractor,
+        inverse=True
+    )
+    print("Initialization complete.")
     
-    # # 4. Train and Summarize
-    # print("Starting training...")
-    # means, vars, losses_train = train_and_summarize(
-    #     model=flow,
-    #     loss_fn=loss_KL,
-    #     data_generator=data_gen,
-    #     optimizer=optimizer,
-    #     epochs=EPOCHS,
-    #     batches_per_epoch=TRAIN_ITERS - 1,
-    #     feature_extractor=feature_extractor,
-    #     inverse=False
-    # )
-    # print("Training complete.")
-    # 
-    # losses = losses_init + losses_train
-    losses = [0]
+    # 4. Train and Summarize
+    print("Starting training...")
+    means, vars, losses_train = train_and_summarize(
+        model=flow,
+        loss_fn=loss_KL,
+        data_generator=data_gen,
+        optimizer=optimizer,
+        epochs=EPOCHS,
+        batches_per_epoch=TRAIN_ITERS - 1,
+        feature_extractor=feature_extractor,
+        inverse=False
+    )
+    print("Training complete.")
+    
+    losses = losses_init + losses_train
+    # losses = [0]
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -247,7 +247,7 @@ def main():
     flow.eval()
     with torch.no_grad():
         for _ in range(num_samples):
-            if _ % 100 == 0:
+            if _+1 % 100 == 0:
                 print(f"Generating sample {_}/{num_samples}")
             x = {
                 'r': Q(normal.sample((1, NA, DIM))) * SIGMA, 
@@ -255,10 +255,10 @@ def main():
                 't': 0.0
                 }
             
-            # x, _, _ = flow(x)
-            for i in range(N_STEPS_FLOW*2):
-                neighbor = assemble_neighbor_features(x['r'], neighborlists)
-                x['r'] = -(neighbor[:, :, 1:5, :].mean(dim=2))*2
+            x, _, _ = flow(x)
+            # for i in range(N_STEPS_FLOW*2):
+            #     neighbor = assemble_neighbor_features(x['r'], neighborlists)
+            #     x['r'] = -(neighbor[:, :, 1:5, :].mean(dim=2))*2
             
             feat = assemble_neighbor_features(x['r'], neighborlists)
             samples_features.append(feat)
