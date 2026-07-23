@@ -215,6 +215,32 @@ class MultiStep(nn.Module):
             logJ += lJ
         return x, logJ, info
 
+import copy
+import torch
+from torch import nn
+
+class MultiIndependent(nn.Module):
+    """
+    Apply n independently trained copies of a given step module.
+    
+    Each layer is a deep copy of `step`, so all parameters are independent.
+    """
+    def __init__(self, step, n):
+        super().__init__()
+        self.n = n
+
+        # Make n independent copies of the step module
+        self.layers = nn.ModuleList([copy.deepcopy(step) for _ in range(n)])
+
+    def forward(self, x, inverse=False, info={}):
+        logJ = 0.0
+
+        for layer in self.layers:
+            x, lJ, info = layer(x, inverse=inverse, info=info)
+            logJ += lJ
+
+        return x, logJ, info
+
 class glow_and_verlet_block(nn.Module):
     def __init__(self, dim, data_expansion = lambda r: r, data_size=1, dt=0.001, hidden_dims = [16]):
         super().__init__()
@@ -248,3 +274,83 @@ class glow_and_verlet_block(nn.Module):
             't': x_coord['t']
         }
         return x, lJ, info
+
+class RealNVP(nn.Module):
+    def __init__(self, dim, hidden_dims=[64], n_layers=10):
+        """
+        dim: number of coordinate dimensions (e.g., 3N)
+        hidden_dims: list of hidden layer sizes for s,t networks
+        n_layers: number of RealNVP coupling layers (default = 10)
+        """
+        super().__init__()
+        self.dim = dim
+        self.n_layers = n_layers
+
+        # Split dimension in half: 3n = dim//2
+        self.split = dim // 2
+
+        # Build 10 independent coupling layers
+        self.s_nets = nn.ModuleList()
+        self.t_nets = nn.ModuleList()
+
+        for _ in range(n_layers):
+            self.s_nets.append(self.make_net(self.split, hidden_dims, dim - self.split))
+            self.t_nets.append(self.make_net(self.split, hidden_dims, dim - self.split))
+
+            # Initialize final layer to zero (same as GlowBlock)
+            self.initialize_coupling_net(self.s_nets[-1])
+            self.initialize_coupling_net(self.t_nets[-1])
+
+    def make_net(self, in_dim, hidden_dims, out_dim):
+        layers = []
+        dims = [in_dim] + hidden_dims + [out_dim]
+        for i in range(len(dims) - 1):
+            layers.append(nn.Linear(dims[i], dims[i+1]))
+            if i < len(dims) - 2:
+                layers.append(nn.ReLU())
+        return nn.Sequential(*layers)
+
+    def initialize_coupling_net(self, net):
+        linear_layers = [m for m in net.modules() if isinstance(m, nn.Linear)]
+        for layer in linear_layers[:-1]:
+            nn.init.kaiming_uniform_(layer.weight, nonlinearity="relu")
+            nn.init.zeros_(layer.bias)
+        nn.init.zeros_(linear_layers[-1].weight)
+        nn.init.zeros_(linear_layers[-1].bias)
+
+    def forward(self, x, inverse=False, info={}):
+        """
+        x: dict with keys 'r', 'p', 't'
+        Only r is transformed by RealNVP.
+        """
+        r = x['r']
+        logJ = torch.zeros(r.shape[:-1], device=r.device)
+
+        for i in range(self.n_layers):
+            # Alternating mask
+            if i % 2 == 0:
+                r1 = r[..., :self.split]
+                r2 = r[..., self.split:]
+            else:
+                r2 = r[..., :self.split]
+                r1 = r[..., self.split:]
+
+            # Compute s,t
+            s = self.s_nets[i](r1).clamp(-5, 5)
+            t = self.t_nets[i](r1)
+
+            if inverse:
+                r2 = (r2 - t) * torch.exp(-s)
+                logJ += (-s).sum(dim=-1)
+            else:
+                r2 = r2 * torch.exp(s) + t
+                logJ += s.sum(dim=-1)
+
+            # Reassemble
+            if i % 2 == 0:
+                r = torch.cat([r1, r2], dim=-1)
+            else:
+                r = torch.cat([r2, r1], dim=-1)
+
+        x['r'] = r
+        return x, logJ, info
