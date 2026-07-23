@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 
-from alchemist.flows import GlowBlock, MultiStep, Q
+from alchemist.flows import GlowBlock, MultiStep, Q, MultiIndependent, RealNVP
 from alchemist.pdbs import read_pdb_coords, write_pdb_trajectory
 from alchemist.neighbors import compute_neighbor_masks, get_neighbor_indices, assemble_neighbor_features
 from alchemist.ml_utils import train_and_summarize
@@ -20,13 +20,13 @@ BATCH_SIZE = 10
 NA = 216
 DIM = 2
 SIGMA = 1.0
-KT = 0.1
+KT = 1.0
 LR = 1e-3
 TRAIN_ITERS = 10
-N_STEPS_FLOW = 20
+N_STEPS_FLOW = 10
 EPOCHS = 20
-HIDDEN_DIMS = [32,32,32]
-output_dir = 'outputs/initialize_and_train_new'
+HIDDEN_DIMS = [256,256]
+output_dir = 'outputs/only_train_realNVP'
 
 # Energy Parameters
 MU = torch.zeros(DIM, dtype=torch.float32)
@@ -43,12 +43,24 @@ def main():
         return assemble_neighbor_features(r, neighborlists).reshape(r.shape[0], r.shape[1], -1)
         
     # 2. Model Setup
-    glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=HIDDEN_DIMS, data_size = 17, data_expansion=data_expansion)
-    flow = MultiStep(glow, N_STEPS_FLOW)
-    optimizer = optim.Adam(glow.parameters(), lr=LR)
+    flow = RealNVP(DIM, NA, hidden_dims=HIDDEN_DIMS, n_layers=N_STEPS_FLOW)
+    # glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=HIDDEN_DIMS, data_size = 17, data_expansion=data_expansion)
+    # flow = MultiIndependent(glow, N_STEPS_FLOW) #MultiStep(glow, N_STEPS_FLOW)
+    optimizer = optim.Adam(flow.parameters(), lr=LR)
     
     # 3. Training Utilities
     normal = torch.distributions.normal.Normal(0, 1)
+
+    def data_gen_NVP():
+        r_coord = torch.tensor(coords, dtype=torch.float32)
+        while True:
+            r_chem = Q(normal.sample((BATCH_SIZE, NA, DIM))) * SIGMA
+            x ={
+                'r': r_chem,
+                'r_coord': r_coord.repeat(BATCH_SIZE, 1, 1),
+                't': 0.0
+            }
+            yield x
     
     def data_gen():
         while True:
@@ -178,7 +190,7 @@ def main():
         
         # energy is (B, N), energy.sum(1) is (B,)
         # logJ is (B,)
-        loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) - logJ
+        loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) #- logJ
         return loss.mean()
 
     def loss_MLE(x0, x, logJ):
@@ -208,25 +220,25 @@ def main():
         return cov
         
     # Initialize with initial samples to get a baseline for the features
-    print("Starting initialization...")
-    means, vars, losses_init = train_and_summarize(
-        model=flow,
-        loss_fn=loss_MLE,
-        data_generator=data_gen_ordered,
-        optimizer=optimizer,
-        epochs=EPOCHS,
-        batches_per_epoch=TRAIN_ITERS - 1,
-        feature_extractor=feature_extractor,
-        inverse=True
-    )
-    print("Initialization complete.")
+    # print("Starting initialization...")
+    # means, vars, losses_init = train_and_summarize(
+    #     model=flow,
+    #     loss_fn=loss_MLE,
+    #     data_generator=data_gen_ordered,
+    #     optimizer=optimizer,
+    #     epochs=EPOCHS,
+    #     batches_per_epoch=TRAIN_ITERS - 1,
+    #     feature_extractor=feature_extractor,
+    #     inverse=True
+    # )
+    # print("Initialization complete.")
     
     # 4. Train and Summarize
     print("Starting training...")
     means, vars, losses_train = train_and_summarize(
         model=flow,
         loss_fn=loss_KL,
-        data_generator=data_gen,
+        data_generator=data_gen_NVP,
         optimizer=optimizer,
         epochs=EPOCHS,
         batches_per_epoch=TRAIN_ITERS - 1,
@@ -235,7 +247,7 @@ def main():
     )
     print("Training complete.")
     
-    losses = losses_init + losses_train
+    losses = losses_train #losses_init +
     # losses = [0]
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -249,11 +261,12 @@ def main():
         for _ in range(num_samples):
             if _+1 % 100 == 0:
                 print(f"Generating sample {_}/{num_samples}")
-            x = {
-                'r': Q(normal.sample((1, NA, DIM))) * SIGMA, 
-                'p': Q(normal.sample((1, NA, DIM))),
-                't': 0.0
-                }
+            x = data_gen_NVP().__next__()
+            # x = {
+            #     'r': Q(normal.sample((1, NA, DIM))) * SIGMA, 
+            #     'p': Q(normal.sample((1, NA, DIM))),
+            #     't': 0.0
+            #     }
             
             x, _, _ = flow(x)
             # for i in range(N_STEPS_FLOW*2):

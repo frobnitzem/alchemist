@@ -276,26 +276,27 @@ class glow_and_verlet_block(nn.Module):
         return x, lJ, info
 
 class RealNVP(nn.Module):
-    def __init__(self, dim, hidden_dims=[64], n_layers=10):
+    def __init__(self, DIM,NA, hidden_dims=[64,64], n_layers=10):
         """
         dim: number of coordinate dimensions (e.g., 3N)
         hidden_dims: list of hidden layer sizes for s,t networks
         n_layers: number of RealNVP coupling layers (default = 10)
         """
         super().__init__()
-        self.dim = dim
         self.n_layers = n_layers
+        self.NA = NA
+        self.DIM = DIM
 
-        # Split dimension in half: 3n = dim//2
-        self.split = dim // 2
+        # Split dimension in half
+        self.split = NA // 2
 
         # Build 10 independent coupling layers
         self.s_nets = nn.ModuleList()
         self.t_nets = nn.ModuleList()
 
         for _ in range(n_layers):
-            self.s_nets.append(self.make_net(self.split, hidden_dims, dim - self.split))
-            self.t_nets.append(self.make_net(self.split, hidden_dims, dim - self.split))
+            self.s_nets.append(self.make_net((DIM+3)*self.split, hidden_dims, (self.split)*DIM))
+            self.t_nets.append(self.make_net((DIM+3)*self.split, hidden_dims, (self.split)*DIM))
 
             # Initialize final layer to zero (same as GlowBlock)
             self.initialize_coupling_net(self.s_nets[-1])
@@ -323,17 +324,24 @@ class RealNVP(nn.Module):
         x: dict with keys 'r', 'p', 't'
         Only r is transformed by RealNVP.
         """
-        r = x['r']
-        logJ = torch.zeros(r.shape[:-1], device=r.device)
-
+        r_chem = x['r']
+        r_coord = x['r_coord']
+        r = torch.cat([r_chem, r_coord], dim=-1)
+        #reshape into per batch dimensions for RealNVP
+        logJ = torch.zeros(r_chem.shape[0], device=r_chem.device)
+        
         for i in range(self.n_layers):
             # Alternating mask
             if i % 2 == 0:
-                r1 = r[..., :self.split]
-                r2 = r[..., self.split:]
+                r1 = r[:, :self.split, :]
+                r2 = r_chem[:, self.split:, :]
+                r_coordpart = r_coord[:, self.split:, :]
             else:
-                r2 = r[..., :self.split]
-                r1 = r[..., self.split:]
+                r2 = r_chem[:, :self.split, :]
+                r1 = r[:, self.split:, :]
+                r_coordpart = r_coord[:, :self.split, :]
+            r1 = r1.reshape(r1.shape[0], -1)
+            r2 = r2.reshape(r2.shape[0], -1)
 
             # Compute s,t
             s = self.s_nets[i](r1).clamp(-5, 5)
@@ -346,11 +354,15 @@ class RealNVP(nn.Module):
                 r2 = r2 * torch.exp(s) + t
                 logJ += s.sum(dim=-1)
 
+            r1 = r1.reshape(r1.shape[0], -1, self.DIM + 3)
+            r2 = r2.reshape(r2.shape[0], -1, self.DIM)
+            r2 = torch.cat([r2, r_coordpart], dim=-1)  # Reattach coordinates
+
             # Reassemble
             if i % 2 == 0:
-                r = torch.cat([r1, r2], dim=-1)
+                r = torch.cat([r1, r2], dim=-2)
             else:
-                r = torch.cat([r2, r1], dim=-1)
+                r = torch.cat([r2, r1], dim=-2)
 
-        x['r'] = r
+        x['r'] = r[:, :, :-3]  # Only keep chemical identities
         return x, logJ, info
