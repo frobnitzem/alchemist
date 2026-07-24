@@ -1,6 +1,6 @@
 from typing import Optional
 
-import torch
+import torch, copy
 
 # First define number formats used in forward and backward quantization
 from qtorch import FixedPoint, FloatingPoint
@@ -214,10 +214,6 @@ class MultiStep(nn.Module):
             x, lJ, info = self.step(x, inverse=inverse, info=info)
             logJ += lJ
         return x, logJ, info
-
-import copy
-import torch
-from torch import nn
 
 class MultiIndependent(nn.Module):
     """

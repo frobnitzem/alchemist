@@ -20,13 +20,13 @@ BATCH_SIZE = 10
 NA = 216
 DIM = 2
 SIGMA = 1.0
-KT = 0.005
+KT = 1*10**(1-9)
 LR = 1e-3
 TRAIN_ITERS = 10
-N_STEPS_FLOW = 30
-EPOCHS = 20
+N_STEPS_FLOW = 10
+EPOCHS = 30
 HIDDEN_DIMS = [8,8,8]
-output_dir = 'outputs/only_train_realNVP_30steps_smalllayers_rescaledkT'
+output_dir = 'outputs/only_train_kT9'
 
 # Energy Parameters
 MU = torch.zeros(DIM, dtype=torch.float32)
@@ -45,9 +45,9 @@ def main():
         return assemble_neighbor_features(r, neighborlists).reshape(r.shape[0], r.shape[1], -1)
         
     # 2. Model Setup
-    flow = RealNVP(DIM, NA, hidden_dims=HIDDEN_DIMS, n_layers=N_STEPS_FLOW)
-    # glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=HIDDEN_DIMS, data_size = 17, data_expansion=data_expansion)
-    # flow = MultiIndependent(glow, N_STEPS_FLOW) #MultiStep(glow, N_STEPS_FLOW) #
+    # flow = RealNVP(DIM, NA, hidden_dims=HIDDEN_DIMS, n_layers=N_STEPS_FLOW)
+    glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=HIDDEN_DIMS, data_size = 17, data_expansion=data_expansion)
+    flow = MultiStep(glow, N_STEPS_FLOW) #MultiIndependent(glow, N_STEPS_FLOW) #
     optimizer = optim.Adam(flow.parameters(), lr=LR)
     
     # 3. Training Utilities
@@ -240,7 +240,7 @@ def main():
     means, vars, losses_train = train_and_summarize(
         model=flow,
         loss_fn=loss_KL,
-        data_generator=data_gen_NVP,
+        data_generator=data_gen,
         optimizer=optimizer,
         epochs=EPOCHS,
         batches_per_epoch=TRAIN_ITERS - 1,
@@ -263,16 +263,16 @@ def main():
         for _ in range(num_samples):
             if (_+1) % 100 == 0:
                 print(f"Generating sample {_+1}/{num_samples}")
-            x ={
-                'r': Q(normal.sample((2, NA, DIM))) * SIGMA,
-                'r_coord': torch.tensor(coords, dtype=torch.float32).repeat(2, 1, 1),
-                't': 0.0
-            }
             # x = {
-            #     'r': Q(normal.sample((1, NA, DIM))) * SIGMA, 
-            #     'p': Q(normal.sample((1, NA, DIM))),
+            #     'r': Q(normal.sample((2, NA, DIM))) * SIGMA,
+            #     'r_coord': torch.tensor(coords, dtype=torch.float32).repeat(2, 1, 1),
             #     't': 0.0
-            #     }
+            # }
+            x = {
+                'r': Q(normal.sample((1, NA, DIM))) * SIGMA, 
+                'p': Q(normal.sample((1, NA, DIM))),
+                't': 0.0
+                }
             
             x, _, _ = flow(x)
             # for i in range(N_STEPS_FLOW*2):
@@ -391,4 +391,8 @@ def main():
     print("Results saved to output directory:", output_dir)
 
 if __name__ == "__main__":
-    main()
+
+    for i in range(1,10):
+        KT = 1*10**(1-i)
+        output_dir = f'outputs/only_train_kT{i}'
+        main()
