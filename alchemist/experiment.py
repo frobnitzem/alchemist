@@ -60,7 +60,7 @@ def main():
             x ={
                 'r': r_chem,
                 'r_coord': r_coord.repeat(BATCH_SIZE, 1, 1),
-                't': 0.0
+                't': torch.tensor(0.0)
             }
             yield x
     
@@ -69,7 +69,7 @@ def main():
             x = {
                 'r': Q(normal.sample((BATCH_SIZE, NA, DIM))) * SIGMA, 
                 'p': Q(normal.sample((BATCH_SIZE, NA, DIM))),
-                't': 0.0
+                't': torch.tensor(0.0)
                 }
             yield x
     
@@ -90,7 +90,7 @@ def main():
             x = {
                 'r': r, 
                 'p': Q(normal.sample((BATCH_SIZE, NA, DIM))),
-                't': 0.0,
+                't': torch.tensor(0.0),
                 'loss': logq
                 }
             yield x
@@ -237,7 +237,7 @@ def main():
     
     # 4. Train and Summarize
     print("Starting training...")
-    means, vars, losses_train = train_and_summarize(
+    vals, losses_train = train_and_summarize(
         model=flow,
         loss_fn=loss_KL,
         data_generator=data_gen,

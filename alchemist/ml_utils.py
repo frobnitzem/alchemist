@@ -32,17 +32,11 @@ def train_and_summarize(
     means = []
     vars = []
     losses = []
+    all_features = []
     for epoch in range(epochs):
         print(f"Epoch {epoch+1}/{epochs}")
-        # Final epoch is for evaluation (no parameter updates)
-        is_eval = (epoch == epochs - 1)
-        
-        if is_eval:
-            model.eval()
-        else:
-            model.train()
-
-        all_features = []
+        # ignored, Final epoch is for evaluation (no parameter updates)
+        model.train()
         
         gen = data_generator()
         for _ in range(batches_per_epoch):
@@ -51,38 +45,29 @@ def train_and_summarize(
             except StopIteration:
                 break
 
-            if not is_eval:
-                optimizer.zero_grad()
-                x = copy.deepcopy(x0)  # Ensure original batch is not modified
+            optimizer.zero_grad()
+            x = copy.deepcopy(x0)  # Ensure original batch is not modified
 
-                x, lJ, info = model(x, inverse=inverse)
+            x, lJ, info = model(x, inverse=inverse)
 
-                feat = feature_extractor(x)
-                all_features.append(feat)
+            feat = feature_extractor(x)
+            all_features.append(feat)
 
-                loss = loss_fn(x0, x, lJ)
+            loss = loss_fn(x0, x, lJ)
 
-                if torch.isnan(loss) or torch.isinf(loss):
-                    raise RuntimeError(f"Loss is NaN/Inf at epoch {epoch}")
-                
-                losses.append(loss.mean().item())
-                # if losses[-1] > 1e6:
-                #     print(x0)
-                #     raise RuntimeError(f"Loss is too large at epoch {epoch}: {losses[-1]}")
+            if torch.isnan(loss) or torch.isinf(loss):
+                raise RuntimeError(f"Loss is NaN/Inf at epoch {epoch}")
+            
+            losses.append(loss.mean().item())
+            # if losses[-1] > 1e6:
+            #     print(x0)
+            #     raise RuntimeError(f"Loss is too large at epoch {epoch}: {losses[-1]}")
 
-                loss.backward()
-                optimizer.step()
-            else:
-                with torch.no_grad():
+            loss.backward()
+            optimizer.step()
 
-                    feat = feature_extractor(model(x0, inverse=inverse)[0])
-                    all_features.append(feat)
-
-        if True:
+        #if True:
             # Stack all batches: (Total_B, M, D)
-            stacked_features = torch.cat(all_features, dim=0)
+            #stacked_features = torch.cat(all_features, dim=0)
             
-            means.append(torch.mean(stacked_features, dim=0))
-            vars.append(torch.var(stacked_features, dim=0))
-            
-    return means, vars, losses
+    return all_features, losses

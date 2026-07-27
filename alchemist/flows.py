@@ -90,10 +90,10 @@ class GlowBlock(nn.Module):
         self.dt = dt
         self.data_expansion = data_expansion
 
-        self.step1 = self.make_net(data_size * dim, hidden_dims, dim)
-        self.step2 = self.make_net(data_size * dim, hidden_dims, dim)
-        self.step3 = self.make_net(data_size * dim, hidden_dims, dim)
-        self.step4 = self.make_net(data_size * dim, hidden_dims, dim)
+        self.step1 = self.make_net(data_size * dim+1, hidden_dims, dim)
+        self.step2 = self.make_net(data_size * dim+1, hidden_dims, dim)
+        self.step3 = self.make_net(data_size * dim+1, hidden_dims, dim)
+        self.step4 = self.make_net(data_size * dim+1, hidden_dims, dim)
 
         self.initialize_coupling_net(self.step1)
         self.initialize_coupling_net(self.step2)
@@ -126,13 +126,18 @@ class GlowBlock(nn.Module):
         return nn.Sequential(*layers)
 
     def st1(self, r, t):
-        s = self.step1(r).clamp(-5,5)
-        t = self.step2(r)
+        #add time as an input to the network
+        t = t.expand(r.size(0))  # now shape (B,)
+        r_time = torch.cat([r, t[:, None, None].expand(-1, r.size(1), 1)], dim=-1)
+        s = self.step1(r_time).clamp(-5,5)
+        t = self.step2(r_time)
         return (s,t)
 
     def st2(self, r, t):
-        s = self.step3(r).clamp(-5,5)
-        t = self.step4(r)
+        t = t.expand(r.size(0))  # now shape (B,)
+        r_time = torch.cat([r, t[:, None, None].expand(-1, r.size(1), 1)], dim=-1)
+        s = self.step3(r_time).clamp(-5,5)
+        t = self.step4(r_time)
         return (s,t)
 
     def forward(self, x, inverse=False, info={}):
@@ -215,27 +220,27 @@ class MultiStep(nn.Module):
             logJ += lJ
         return x, logJ, info
 
-class MultiIndependent(nn.Module):
-    """
-    Apply n independently trained copies of a given step module.
+# class MultiIndependent(nn.Module):
+#     """
+#     Apply n independently trained copies of a given step module.
     
-    Each layer is a deep copy of `step`, so all parameters are independent.
-    """
-    def __init__(self, step, n):
-        super().__init__()
-        self.n = n
+#     Each layer is a deep copy of `step`, so all parameters are independent.
+#     """
+#     def __init__(self, step, n):
+#         super().__init__()
+#         self.n = n
 
-        # Make n independent copies of the step module
-        self.layers = nn.ModuleList([copy.deepcopy(step) for _ in range(n)])
+#         # Make n independent copies of the step module
+#         self.layers = nn.ModuleList([copy.deepcopy(step) for _ in range(n)])
 
-    def forward(self, x, inverse=False, info={}):
-        logJ = 0.0
+#     def forward(self, x, inverse=False, info={}):
+#         logJ = 0.0
 
-        for layer in self.layers:
-            x, lJ, info = layer(x, inverse=inverse, info=info)
-            logJ += lJ
+#         for layer in self.layers:
+#             x, lJ, info = layer(x, inverse=inverse, info=info)
+#             logJ += lJ
 
-        return x, logJ, info
+#         return x, logJ, info
 
 class glow_and_verlet_block(nn.Module):
     def __init__(self, dim, data_expansion = lambda r: r, data_size=1, dt=0.001, hidden_dims = [16]):

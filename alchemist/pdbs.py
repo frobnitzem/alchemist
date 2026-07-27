@@ -43,6 +43,8 @@ def write_pdb_trajectory(
         for frame_index, (ga_frame, as_frame) in enumerate(
             zip(ga_percents, as_percents), start=1
         ):
+            if (frame_index+1) % 200 == 0:
+                print(f"Writing frame {frame_index+1}/{len(ga_percents)}")
             pdb_file.write(f"MODEL {frame_index:4d}\n")
             for atom_index, (coord, ga_value, as_value) in enumerate(
                 zip(coords, ga_frame, as_frame), start=1
