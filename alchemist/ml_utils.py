@@ -58,7 +58,7 @@ def train_and_summarize(
             if torch.isnan(loss) or torch.isinf(loss):
                 raise RuntimeError(f"Loss is NaN/Inf at epoch {epoch}")
             
-            losses.append(loss.mean().item())
+            losses.append([loss.mean().item(),lJ.mean().item()])
             # if losses[-1] > 1e6:
             #     print(x0)
             #     raise RuntimeError(f"Loss is too large at epoch {epoch}: {losses[-1]}")

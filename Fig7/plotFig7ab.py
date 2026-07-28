@@ -5,7 +5,7 @@ import torch.optim as optim
 
 from pathlib import Path
 
-from alchemist.flows import GlowBlock, MultiStep, Q, MultiIndependent, RealNVP
+from alchemist.flows import GlowBlock, MultiStep, Q, RealNVP
 from alchemist.pdbs import read_pdb_coords, write_pdb_trajectory
 from alchemist.neighbors import compute_neighbor_masks, get_neighbor_indices, assemble_neighbor_features
 from alchemist.ml_utils import train_and_summarize
@@ -41,16 +41,20 @@ def _compute_interactions(last_ga_frame, first_pairs, second_pairs):
 if __name__ == "__main__":
     CUTS = [2.5, 4.5]
     test_count = 10000
-    kT = 1
     DIM = 2
     SIGMA = 1
     scale = test_count // 5
     folder = 'Fig5'
-    for nn_model in glob.glob(f'{folder}/*/trained_flow_model.pth'):
+    run_type = 'RealNVP'
+    NA = 216
+    average_interactions = []
+    KTs = []
+    for KT in KTs:
+        nn_model = glob.glob(f'{folder}/{run_type}_{NA}/trained_flow_model.pth')[0]
         print(f"Testing model: {nn_model}")
         filename = folder + '/' + nn_model.split('/')[1] + '/'
         networkdims = [8,8,8]
-        NA = int(nn_model.split('/')[1].split('_')[1])
+        # NA = int(nn_model.split('/')[1].split('_')[1])
         PDB_PATH = Path(f'examples/GaAs/GaAs{NA}.pdb')
         num_repeats = round((NA / 8)**(1/3),0)
         BOX = torch.full((3,), 5.75 * num_repeats)
@@ -103,7 +107,7 @@ if __name__ == "__main__":
                 overall_interactions[i] = interactions
 
                 energy = interactions[0] * -0.1 + interactions[1] * -0.5 + interactions[2] * -0.1 + \
-                         interactions[3] * -0.05 + interactions[4] * 0.0 + interactions[5] * -0.05
+                        interactions[3] * -0.05 + interactions[4] * 0.0 + interactions[5] * -0.05
 
                 # energy = interactions[0] * 0.3 + interactions[1] * 0.1 + interactions[2] * 0.5
                 t3 = time.perf_counter()
@@ -183,3 +187,21 @@ if __name__ == "__main__":
 
         # Save the dictionary
         torch.save(save_dict, f'{filename}test_results.pt')
+        average_interactions.append(overall_interactions.mean(dim=0).numpy())
+    
+    plt.figure(figsize=(10, 6))
+    #there are 6 interaction types, so we will plot the average of each type across all KTs
+    average_interactions = torch.tensor(average_interactions)
+    plt.plot(average_interactions[:, 0], label='1st neighbor Ga-Ga')
+    plt.plot(average_interactions[:, 1], label='1st neighbor Ga-As')
+    plt.plot(average_interactions[:, 2], label='1st neighbor As-As')
+    plt.plot(average_interactions[:, 3], label='2nd neighbor Ga-Ga')
+    plt.plot(average_interactions[:, 4], label='2nd neighbor Ga-As')
+    plt.plot(average_interactions[:, 5], label='2nd neighbor As-As')
+    plt.xlabel('Temperature')
+    plt.ylabel('Average Interaction Count')
+    plt.title('Interactions vs Temperature')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f'{filename}interactions_vs_temperature.png', dpi=150)
+    

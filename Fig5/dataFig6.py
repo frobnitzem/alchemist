@@ -5,7 +5,7 @@ import torch.optim as optim
 
 from pathlib import Path
 
-from alchemist.flows import GlowBlock, MultiStep, Q, MultiIndependent, RealNVP
+from alchemist.flows import GlowBlock, MultiStep, Q, RealNVP, fix_kT
 from alchemist.pdbs import read_pdb_coords, write_pdb_trajectory
 from alchemist.neighbors import compute_neighbor_masks, get_neighbor_indices, assemble_neighbor_features
 from alchemist.ml_utils import train_and_summarize
@@ -41,16 +41,17 @@ def _compute_interactions(last_ga_frame, first_pairs, second_pairs):
 if __name__ == "__main__":
     CUTS = [2.5, 4.5]
     test_count = 10000
-    kT = 1
+    KT = 0.02569
     DIM = 2
-    SIGMA = 1
+    SIGMA = 10
     scale = test_count // 5
     folder = 'Fig5'
-    for nn_model in glob.glob(f'{folder}/*/trained_flow_model.pth'):
+    run_type = 'Glow'
+    for nn_model in glob.glob(f'{folder}/{run_type}_*/trained_flow_model.pth'):
         print(f"Testing model: {nn_model}")
         filename = folder + '/' + nn_model.split('/')[1] + '/'
         networkdims = [8,8,8]
-        NA = int(nn_model.split('/')[1].split('_')[1])
+        NA = int(nn_model.split('/')[1].split('_')[1][2:])
         PDB_PATH = Path(f'examples/GaAs/GaAs{NA}.pdb')
         num_repeats = round((NA / 8)**(1/3),0)
         BOX = torch.full((3,), 5.75 * num_repeats)
@@ -75,7 +76,10 @@ if __name__ == "__main__":
         sample_time_s = 0.0
         interaction_time_s = 0.0
 
-        normal = torch.distributions.normal.Normal(0, 1)
+        r_buf = torch.empty((1, NA, DIM))
+        p_buf = torch.empty((1, NA, DIM))
+        t_buf = torch.zeros((1,), dtype=torch.float32)
+
 
         with torch.no_grad():
             for i in range(test_count):
@@ -83,11 +87,12 @@ if __name__ == "__main__":
                     print(f"Generating sample {i+1}/{test_count}")
                 
                 t0 = time.perf_counter()
-                x = {
-                    'r': Q(normal.sample((1, NA, DIM))) * SIGMA, 
-                    'p': Q(normal.sample((1, NA, DIM))),
-                    't': 0.0
-                    }
+                torch.randn(r_buf.shape, out=r_buf)
+                torch.randn(p_buf.shape, out=p_buf)
+                x = {'r': Q(r_buf) * SIGMA,
+                    'p': Q(fix_kT(p_buf, KT)),
+                    't': t_buf}
+
                 
                 x, _, _ = flow(x)
 

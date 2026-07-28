@@ -1,4 +1,4 @@
-from tkinter import X
+from tkinter import TRUE, X
 import torch, math, copy, time
 import torch.optim as optim
 import torch.nn.functional as F
@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 
-from alchemist.flows import GlowBlock, MultiStep, Q, RealNVP, LeapFrog
+from alchemist.flows import GlowBlock, MultiStep, Q, RealNVP, LeapFrog, fix_kT
 from alchemist.pdbs import read_pdb_coords, write_pdb_trajectory
 from alchemist.neighbors import compute_neighbor_masks, get_neighbor_indices, assemble_neighbor_features
 from alchemist.ml_utils import train_and_summarize
@@ -19,9 +19,9 @@ DIM = 2
 SIGMA = 1.0
 KT = 0.0257  #note k = 8.617333 *10^-5 eV/K, T = 298.15K, kT = 0.0257 eV but we are using arbitrary units so we can set kT = 1 for simplicity
 LR = 1e-3
-TRAIN_ITERS = 10
+TRAIN_ITERS = 11
 N_STEPS_FLOW = 10
-EPOCHS = 20
+EPOCHS = 30
 HIDDEN_DIMS = [8,8,8]
 output_dir = 'outputs/only_train_kT9'
 
@@ -30,7 +30,7 @@ MU = torch.tensor([2,3], dtype=torch.float32)
 E1 = torch.tensor([[0,0],[0,0]], dtype=torch.float32)
 E2 = torch.tensor([[0,0],[0,0]], dtype=torch.float32)
 
-def main(runtype = 'RealNVP', num ='1'):
+def main(runtype = 'RealNVP'):
     PDB_PATH = Path(f'examples/GaAs/GaAs{NA}.pdb')
     num_repeats = round((NA / 8)**(1/3), 0)  # Calculate the number of repeats needed to achieve NA atoms
     BOX = torch.full((3,), 5.75 * num_repeats)
@@ -57,7 +57,7 @@ def main(runtype = 'RealNVP', num ='1'):
         while True:
             x = {
                 'r': Q(normal.sample((BATCH_SIZE, NA, DIM))) * SIGMA, 
-                'p': Q(normal.sample((BATCH_SIZE, NA, DIM))),
+                'p': Q(fix_kT(normal.sample((BATCH_SIZE, NA, DIM)), KT)),
                 't': torch.tensor(0.0),
                 }
             yield x
@@ -181,7 +181,7 @@ def main(runtype = 'RealNVP', num ='1'):
 
         # energy is (B, N), energy.sum(1) is (B,)
         # logJ is (B,)
-        print(energy.sum(1).mean().item(), energy0.sum(1).mean().item(), logJ.mean().item())
+        # print(energy.sum(1).mean().item(), energy0.sum(1).mean().item(), logJ.mean().item())
         loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) - logJ
         return loss.mean()
 
@@ -284,17 +284,29 @@ def main(runtype = 'RealNVP', num ='1'):
         #average compositions over batches
         compositions = torch.stack(compositions, dim=0).detach().numpy() # (EPOCHS, D) -> (EPOCHS,)
         color = 'tab:red'
-        axes3.set_xlabel('Batch')
         axes3.set_ylabel('Composition', color=color)
-        axes3.scatter(range(compositions.shape[0]), compositions, color=color)
 
-        axes4 = axes3.twinx()  # instantiate a second Axes that shares the same x-axis
         if losses is not None:
+            axes3.scatter(range(compositions.shape[0]), compositions, color=color)
+            axes3.set_xlabel('Batch')
+
+            losses = torch.tensor(losses).detach().numpy() # (EPOCHS, 2) -> (EPOCHS, 2)
+            all_losses = losses[:, 0]
+            lJ_losses = -losses[:, 1]
+            U_losses = all_losses - lJ_losses
+
+            axes4 = axes3.twinx()  # instantiate a second Axes that shares the same x-axis
             color = 'tab:blue'
             axes4.set_ylabel('Loss', color=color)
-            axes4.plot(losses, color=color)
+            axes4.plot(all_losses, color=color, label='Total Loss')
+            axes4.plot(lJ_losses, color='tab:orange', label='Log-Jacobians')
+            axes4.plot(U_losses, color='tab:green', label='Energy')
+            axes4.tick_params(axis='y', labelcolor=color)
+            axes4.legend()
             axes3.set_title("Loss and Composition Analysis")
         else:
+            axes3.scatter((torch.arange(compositions.shape[0])+1)*200, compositions, color=color)
+            axes3.set_xlabel('Time step (dt)')
             axes3.set_title("Composition Analysis")
 
         fig3.tight_layout()  # otherwise the right y-label is slightly clipped
@@ -338,18 +350,25 @@ def main(runtype = 'RealNVP', num ='1'):
         print("Results saved to output directory:", output_dir)
         p_A_overall = p_a_all.mean().item()
         try:
-            K = p_A_overall / (1 - p_A_overall)
+            K = (1 - p_A_overall)/p_A_overall
         except ZeroDivisionError:
             K = 10
 
         del p_A_overall, p_a_all, per_atom_energy, flat_energy, flat_p_a
         torch.cuda.empty_cache()
 
+        #save results
+        results = {
+            'K': K,
+            'time': (t1 - t0)/num_samples,
+        }
+        torch.save(results, f'{output_dir}/results.pt')
+
         return K, (t1 - t0)/num_samples
     
     print("Starting training...")
     if runtype == 'RealNVP':
-        output_dir = f'Fig3/RealNVP_{num}'
+        output_dir = f'Fig3/RealNVP_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         loss_fn = loss_KL
         data_gen = data_gen_NVP
@@ -370,7 +389,7 @@ def main(runtype = 'RealNVP', num ='1'):
         losses = losses_train
         return graphing(compositions, output_dir, data_gen, losses)
     elif runtype == 'Glow':
-        output_dir = f'Fig3/Glow_{num}'
+        output_dir = f'Fig3/Glow_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         loss_fn = loss_KL
         data_gen = data_gen
@@ -392,74 +411,81 @@ def main(runtype = 'RealNVP', num ='1'):
         losses = losses_train
         return graphing(compositions, output_dir, data_gen, losses)
     elif runtype == 'leapfrog':
-        output_dir = f'Fig3/LeapFrog_{num}'
+        output_dir = f'Fig3/LeapFrog_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         def U(r, t):
-            return compute_energy_parameterized(assemble_neighbor_features(r, neighborlists), MU, E1, E2).sum(dim=1)
+            percents = torch.softmax(r, dim=-1)
+            return MU[0]*percents[..., 0].sum(dim=-1) + MU[1]*percents[..., 1].sum(dim=-1) + (r*r).sum((-2,-1))/(2*SIGMA**2)
         
         flow = LeapFrog(U, const_kT = KT)
         vals = []
         x0 = next(data_gen())
         x = copy.deepcopy(x0)
-        for epoch in range(EPOCHS):
-            for _ in range(TRAIN_ITERS-1):
-                x, lJ, info = flow(x)
-
+        logJ = 0.0
+        
+        for epoch in range(100000):
+            x_new, lJ, info = flow(x)
+            logJ += lJ.detach()
+            x = {k: v.detach().requires_grad_(True) for k, v in x_new.items()}
+            if (epoch+1) % 2000 == 0:
+                print(f"Leapfrog training epoch {epoch+1}/100000")
                 feat = feature_extractor(x)
                 vals.append(feat)
         compositions = vals
-        print("Leapfrog training complete. Generating samples and analysis...")
         return graphing(compositions, output_dir, data_gen)
     else:
         assert False, f"Unknown runtype: {runtype}"
     print("Training complete.")
 
 if __name__ == "__main__":
-    if True:
-        KT = 0.0257  #note k = 8.617333 *10^-5 eV/K, T = 298.15K, kT = 0.0257 eV but we are using arbitrary units so we can set kT = 1 for simplicity
+    SIGMA = 10
+    if TRUE:
+        KT = 0.02569  #note k = 8.617333 *10^-5 eV/K, T = 298.15K, kT = 0.0257 eV but we are using arbitrary units so we can set kT = 1 for simplicity
         output_dir = 'outputs/only_train_kT9'
 
         Ks_NVP = []
         Ks_Glow = []
         Ks_LeapFrog = []
-        KTs = [0.02397,0.02569,0.02715]
 
-        for i, KT in enumerate(KTs): #range of T + 20 and - 20 from 298.15
-            K_Glow, time_Glow = main(runtype='Glow', num=str(i+1))
-            K_NVP, time_NVP = main(runtype='RealNVP', num=str(i+1))
-            K_LeapFrog, time_LeapFrog = main(runtype='leapfrog', num=str(i+1))
+        KTs = [round(0.02569*0.25,5), round(0.02569*0.5,5), round(0.02569,5), round(0.02569*2,5), round(0.02569*4,5)]
+
+        for i, KT in enumerate(KTs):
+            # K_LeapFrog, time_LeapFrog = main(runtype='leapfrog')
+            K_Glow, time_Glow = main(runtype='Glow')
+            K_NVP, time_NVP = main(runtype='RealNVP')
+            
 
             Ks_NVP.append(K_NVP)
             Ks_Glow.append(K_Glow)
-            Ks_LeapFrog.append(K_LeapFrog)
+            # Ks_LeapFrog.append(K_LeapFrog)
 
         #vant hoff plot
         fig, ax = plt.subplots(figsize=(6, 4))
-        T = 1 / torch.tensor([0.02397,0.02569,0.02715], dtype=torch.float32)
+        T = 1 / torch.tensor(KTs, dtype=torch.float32)
 
         #simulation results
         lnK_NVP = torch.log(torch.tensor(Ks_NVP, dtype=torch.float32))
         lnK_Glow = torch.log(torch.tensor(Ks_Glow, dtype=torch.float32))
-        lnK_LeapFrog = torch.log(torch.tensor(Ks_LeapFrog, dtype=torch.float32))
+        # lnK_LeapFrog = torch.log(torch.tensor(Ks_LeapFrog, dtype=torch.float32))
         ax.scatter(T.numpy(), lnK_NVP.numpy(), label='RealNVP', color='b')
         ax.scatter(T.numpy(), lnK_Glow.numpy(), label='Glow', color='g')
-        ax.scatter(T.numpy(), lnK_LeapFrog.numpy(), label='LeapFrog', color='r')
+        # ax.scatter(T.numpy(), lnK_LeapFrog.numpy(), label='LeapFrog', color='r')
 
         #calculate fit lines for each method
         coeffs_NVP = np.polyfit(T.numpy(), lnK_NVP.numpy(), 1)
         coeffs_Glow = np.polyfit(T.numpy(), lnK_Glow.numpy(), 1)
-        coeffs_LeapFrog = np.polyfit(T.numpy(), lnK_LeapFrog.numpy(), 1)
+        # coeffs_LeapFrog = np.polyfit(T.numpy(), lnK_LeapFrog.numpy(), 1)
         fit_line_NVP = np.polyval(coeffs_NVP, T.numpy())
         fit_line_Glow = np.polyval(coeffs_Glow, T.numpy())
-        fit_line_LeapFrog = np.polyval(coeffs_LeapFrog, T.numpy())
+        # fit_line_LeapFrog = np.polyval(coeffs_LeapFrog, T.numpy())
 
         #draw fit lines for each method
         ax.plot(T.numpy(), fit_line_NVP, label='RealNVP Fit: ' + f'{coeffs_NVP[0]:.2f}x + {coeffs_NVP[1]:.2f}', color='b', linestyle='--')
         ax.plot(T.numpy(), fit_line_Glow, label='Glow Fit: ' + f'{coeffs_Glow[0]:.2f}x + {coeffs_Glow[1]:.2f}', color='g', linestyle='--')
-        ax.plot(T.numpy(), fit_line_LeapFrog, label='LeapFrog Fit: ' + f'{coeffs_LeapFrog[0]:.2f}x + {coeffs_LeapFrog[1]:.2f}', color='r', linestyle='--')
+        # ax.plot(T.numpy(), fit_line_LeapFrog, label='LeapFrog Fit: ' + f'{coeffs_LeapFrog[0]:.2f}x + {coeffs_LeapFrog[1]:.2f}', color='r', linestyle='--')
 
         #thoeretical results
-        lnK_theory = -(MU[1] - MU[0]) / T
+        lnK_theory = -(MU[1] - MU[0]) * T
         print("Theoretical lnK values:", lnK_theory.numpy())
         ax.plot(T.numpy(), lnK_theory.numpy(), label='Theory', linestyle='-', color='k') 
 
@@ -486,9 +512,9 @@ if __name__ == "__main__":
         times_Glow = []
         times_LeapFrog = []
         for NA in NAs:
-            K_Glow, time_Glow = main(runtype='Glow', num=str(NA))
-            K_LeapFrog, time_LeapFrog = main(runtype='leapfrog', num=str(NA))
-            K_NVP, time_NVP = main(runtype='RealNVP', num=str(NA))
+            K_Glow, time_Glow = main(runtype='Glow')
+            K_LeapFrog, time_LeapFrog = main(runtype='leapfrog')
+            K_NVP, time_NVP = main(runtype='RealNVP')
 
             times_NVP.append(time_NVP)
             times_Glow.append(time_Glow)

@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 
-from alchemist.flows import GlowBlock, MultiStep, Q, RealNVP, LeapFrog
+from alchemist.flows import GlowBlock, MultiStep, Q, RealNVP, LeapFrog, fix_kT
 from alchemist.pdbs import read_pdb_coords, write_pdb_trajectory
 from alchemist.neighbors import compute_neighbor_masks, get_neighbor_indices, assemble_neighbor_features
 from alchemist.ml_utils import train_and_summarize
@@ -18,12 +18,12 @@ CUTS = [2.5, 4.5]
 BATCH_SIZE = 50
 NA = 216
 DIM = 2
-SIGMA = 1.0
+SIGMA = 10.0
 KT = 0.0257  #note k = 8.617333 *10^-5 eV/K, T = 298.15K, kT = 0.0257 eV but we are using arbitrary units so we can set kT = 1 for simplicity
 LR = 1e-3
 TRAIN_ITERS = 10
-N_STEPS_FLOW = 10
-EPOCHS = 20
+N_STEPS_FLOW = 4
+EPOCHS = 30
 HIDDEN_DIMS = [8,8,8]
 output_dir = 'outputs/only_train_kT9'
 
@@ -34,7 +34,7 @@ MU = torch.tensor([0,0], dtype=torch.float32)
 E1 = torch.tensor([[-0.1,-0.5],[-0.5,-0.1]], dtype=torch.float32)
 E2 = torch.tensor([[-0.05,-0],[-0,-0.05]], dtype=torch.float32)
 
-def main(runtype = 'RealNVP', num ='1'):
+def main(runtype = 'RealNVP'):
     PDB_PATH = Path(f'examples/GaAs/GaAs{NA}.pdb')
     num_repeats = round((NA / 8)**(1/3),0)
     BOX = torch.full((3,), 5.75 * num_repeats)
@@ -62,7 +62,7 @@ def main(runtype = 'RealNVP', num ='1'):
         while True:
             x = {
                 'r': Q(normal.sample((BATCH_SIZE, NA, DIM))) * SIGMA, 
-                'p': Q(normal.sample((BATCH_SIZE, NA, DIM))),
+                'p': Q(fix_kT(normal.sample((BATCH_SIZE, NA, DIM)),KT)),
                 't': torch.tensor(0.0),
                 }
             yield x
@@ -294,13 +294,23 @@ def main(runtype = 'RealNVP', num ='1'):
 
         axes4 = axes3.twinx()  # instantiate a second Axes that shares the same x-axis
         if losses is not None:
+            losses = torch.tensor(losses).detach().numpy() # (EPOCHS, 2) -> (EPOCHS, 2)
+            all_losses = losses[:, 0]
+            lJ_losses = -losses[:, 1]
+            U_losses = all_losses - lJ_losses
+
+            axes4 = axes3.twinx()  # instantiate a second Axes that shares the same x-axis
             color = 'tab:blue'
             axes4.set_ylabel('Loss', color=color)
-            axes4.plot(losses, color=color)
+            axes4.plot(all_losses, color=color, label='Total Loss')
+            axes4.plot(lJ_losses, color='tab:orange', label='Log-Jacobians')
+            axes4.plot(U_losses, color='tab:green', label='Energy')
+            axes4.tick_params(axis='y', labelcolor=color)
+            axes4.legend()
             axes3.set_title("Loss and Composition Analysis")
         else:
             axes3.set_title("Composition Analysis")
-
+        
         fig3.tight_layout()  # otherwise the right y-label is slightly clipped
         plt.savefig(f'{output_dir}/ Composition_and_Loss_Analysis.png')
 
@@ -353,7 +363,7 @@ def main(runtype = 'RealNVP', num ='1'):
     
     print("Starting training...")
     if runtype == 'RealNVP':
-        output_dir = f'Fig5/RealNVP_{num}'
+        output_dir = f'Fig5/RealNVP_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         loss_fn = loss_KL
         data_gen = data_gen_NVP
@@ -374,7 +384,7 @@ def main(runtype = 'RealNVP', num ='1'):
         losses = losses_train
         return graphing(compositions, output_dir, data_gen, losses)
     elif runtype == 'Glow':
-        output_dir = f'Fig5/Glow_{num}'
+        output_dir = f'Fig5/Glow_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         loss_fn = loss_KL
         data_gen = data_gen
@@ -400,19 +410,23 @@ def main(runtype = 'RealNVP', num ='1'):
         losses = losses_train
         return graphing(compositions, output_dir, data_gen, losses)
     elif runtype == 'leapfrog':
-        output_dir = f'Fig5/LeapFrog_{num}'
+        output_dir = f'Fig5/LeapFrog_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         def U(r, t):
             return compute_energy_parameterized(assemble_neighbor_features(r, neighborlists), MU, E1, E2).sum(dim=1)
         
-        flow = LeapFrog(U)
+        flow = LeapFrog(U, const_kT = KT)
         vals = []
         x0 = next(data_gen())
         x = copy.deepcopy(x0)
-        for epoch in range(EPOCHS):
-            for _ in range(TRAIN_ITERS-1):
-                x, lJ, info = flow(x)
-
+        logJ = 0.0
+        
+        for epoch in range(50000):
+            x_new, lJ, info = flow(x)
+            logJ += lJ.detach()
+            x = {k: v.detach().requires_grad_(True) for k, v in x_new.items()}
+            if (epoch+1) % 200 == 0:
+                print(f"Leapfrog training epoch {epoch+1}/50000")
                 feat = feature_extractor(x)
                 vals.append(feat)
         compositions = vals
@@ -424,21 +438,18 @@ def main(runtype = 'RealNVP', num ='1'):
 
 if __name__ == "__main__":
     if True:
-        KT = 0.0257  #note k = 8.617333 *10^-5 eV/K, T = 298.15K, kT = 0.0257 eV but we are using arbitrary units so we can set kT = 1 for simplicity
-        output_dir = 'outputs/only_train_kT9'
+        KT = 0.02569  #note k = 8.617333 *10^-5 eV/K, T = 298.15K, kT = 0.0257 eV but we are using arbitrary units so we can set kT = 1 for simplicity
 
         #times plot
         #get times for NA = 8, 64, 216, 512
         NAs = [64, 216, 512]
-        KT = 0.0257
         times_NVP = []
         times_Glow = []
         times_LeapFrog = []
         for NA in NAs:
-            BATCH_SIZE = 50
-            K_NVP, time_NVP = main(runtype='RealNVP', num=str(NA))
-            K_Glow, time_Glow = main(runtype='Glow', num=str(NA))
-            K_LeapFrog, time_LeapFrog = main(runtype='leapfrog', num=str(NA))
+            K_NVP, time_NVP = main(runtype='RealNVP')
+            K_Glow, time_Glow = main(runtype='Glow')
+            K_LeapFrog, time_LeapFrog = main(runtype='leapfrog')
 
             times_NVP.append(time_NVP)
             times_Glow.append(time_Glow)
