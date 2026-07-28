@@ -46,11 +46,13 @@ if __name__ == "__main__":
     SIGMA = 10
     scale = test_count // 5
     folder = 'Fig5'
-    run_type = 'Glow'
+    run_type = 'RealNVP'
     for nn_model in glob.glob(f'{folder}/{run_type}_*/trained_flow_model.pth'):
         print(f"Testing model: {nn_model}")
         filename = folder + '/' + nn_model.split('/')[1] + '/'
         networkdims = [8,8,8]
+        HIDDEN_DIMS = [8,8,8]
+        N_STEPS_FLOW = 4
         NA = int(nn_model.split('/')[1].split('_')[1][2:])
         PDB_PATH = Path(f'examples/GaAs/GaAs{NA}.pdb')
         num_repeats = round((NA / 8)**(1/3),0)
@@ -64,8 +66,11 @@ if __name__ == "__main__":
         def data_expansion(r):
             return assemble_neighbor_features(r, neighborlists).reshape(r.shape[0], r.shape[1], -1)
         
-        glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=networkdims, data_size = 17, data_expansion=data_expansion)
-        flow = MultiStep(glow, 10)
+        if run_type == 'RealNVP':
+            flow = RealNVP(DIM, NA, hidden_dims=HIDDEN_DIMS, n_layers=N_STEPS_FLOW)
+        elif run_type == 'Glow':
+            glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=networkdims, data_size = 17, data_expansion=data_expansion)
+            flow = MultiStep(glow, 4)
         weights = torch.load(nn_model)
         flow.load_state_dict(weights)
         flow.eval()
@@ -76,9 +81,14 @@ if __name__ == "__main__":
         sample_time_s = 0.0
         interaction_time_s = 0.0
 
-        r_buf = torch.empty((1, NA, DIM))
-        p_buf = torch.empty((1, NA, DIM))
-        t_buf = torch.zeros((1,), dtype=torch.float32)
+        if run_type == 'RealNVP':
+            r_buf = torch.empty((1, NA, DIM))
+            r_coord_buf = torch.empty((1, NA, DIM))
+            t_buf = torch.zeros((1,), dtype=torch.float32)
+        elif run_type == 'Glow':
+            r_buf = torch.empty((1, NA, DIM))
+            p_buf = torch.empty((1, NA, DIM))
+            t_buf = torch.zeros((1,), dtype=torch.float32)
 
 
         with torch.no_grad():
@@ -87,11 +97,18 @@ if __name__ == "__main__":
                     print(f"Generating sample {i+1}/{test_count}")
                 
                 t0 = time.perf_counter()
-                torch.randn(r_buf.shape, out=r_buf)
-                torch.randn(p_buf.shape, out=p_buf)
-                x = {'r': Q(r_buf) * SIGMA,
-                    'p': Q(fix_kT(p_buf, KT)),
-                    't': t_buf}
+
+                if run_type == 'RealNVP':
+                    torch.randn(r_buf.shape, out=r_buf)
+                    x = {'r': Q(r_buf) * SIGMA,
+                        'r_coord': torch.tensor(coords, dtype=torch.float32).repeat(1, 1, 1),
+                        't': t_buf}
+                elif run_type == 'Glow':
+                    torch.randn(r_buf.shape, out=r_buf)
+                    torch.randn(p_buf.shape, out=p_buf)
+                    x = {'r': Q(r_buf) * SIGMA,
+                        'p': Q(fix_kT(p_buf, KT)),
+                        't': t_buf}
 
                 
                 x, _, _ = flow(x)

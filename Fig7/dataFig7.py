@@ -386,7 +386,7 @@ def main(runtype = 'RealNVP'):
     
     print("Starting training...")
     if runtype == 'RealNVP':
-        output_dir = f'Fig5/RealNVP_NA{NA}_KT{KT}'
+        output_dir = f'Fig7/RealNVP_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         loss_fn = loss_KL
         data_gen = data_gen_NVP
@@ -407,7 +407,7 @@ def main(runtype = 'RealNVP'):
         losses = losses_train
         return graphing(compositions, output_dir, data_gen, losses)
     elif runtype == 'Glow':
-        output_dir = f'Fig5/Glow_NA{NA}_KT{KT}'
+        output_dir = f'Fig7/Glow_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         loss_fn = loss_KL
         data_gen = data_gen
@@ -441,7 +441,7 @@ def main(runtype = 'RealNVP'):
             percents_A = percents.mean(dim=(0,1))[0]
             interactions = _compute_interactions(percents_A, first_pairs, second_pairs)
             return percents_A, interactions
-        output_dir = f'Fig5/LeapFrog_NA{NA}_KT{KT}'
+        output_dir = f'Fig7/LeapFrog_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         def U(r, t):
             return compute_energy_parameterized(assemble_neighbor_features(r, neighborlists), MU, E1, E2).sum(dim=1)
@@ -477,21 +477,21 @@ if __name__ == "__main__":
         KTs = [0.0002569, 0.002569, 0.02569, 0.2569, 2.569]
         times_NVP = []
         times_Glow = []
-        times_LeapFrog = []
+        # times_LeapFrog = []
         for KT in KTs:
             K_NVP, time_NVP = main(runtype='RealNVP')
             K_Glow, time_Glow = main(runtype='Glow')
-            K_LeapFrog, time_LeapFrog = main(runtype='leapfrog')
+            # K_LeapFrog, time_LeapFrog = main(runtype='leapfrog')
 
             times_NVP.append(time_NVP)
             times_Glow.append(time_Glow)
-            times_LeapFrog.append(time_LeapFrog)
+            # times_LeapFrog.append(time_LeapFrog)
         
         # Plot the times
         fig, ax = plt.subplots(figsize=(6, 4))
         ax.plot(KTs, times_NVP, label='RealNVP', marker='o')
         ax.plot(KTs, times_Glow, label='Glow', marker='o')
-        ax.plot(KTs, times_LeapFrog, label='LeapFrog', marker='o')
+        # ax.plot(KTs, times_LeapFrog, label='LeapFrog', marker='o')
         ax.set_xlabel('Temperature (KT)')
         ax.set_ylabel('Time per Sample (s)')
         ax.set_title('Time per Sample vs Temperature')

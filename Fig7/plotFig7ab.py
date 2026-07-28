@@ -5,7 +5,7 @@ import torch.optim as optim
 
 from pathlib import Path
 
-from alchemist.flows import GlowBlock, MultiStep, Q, RealNVP
+from alchemist.flows import GlowBlock, MultiStep, Q, RealNVP, fix_kT
 from alchemist.pdbs import read_pdb_coords, write_pdb_trajectory
 from alchemist.neighbors import compute_neighbor_masks, get_neighbor_indices, assemble_neighbor_features
 from alchemist.ml_utils import train_and_summarize
@@ -44,13 +44,13 @@ if __name__ == "__main__":
     DIM = 2
     SIGMA = 1
     scale = test_count // 5
-    folder = 'Fig5'
+    folder = 'Fig7'
     run_type = 'RealNVP'
     NA = 216
     average_interactions = []
-    KTs = []
+    KTs = [0.002569,0.02569,0.2569]
     for KT in KTs:
-        nn_model = glob.glob(f'{folder}/{run_type}_{NA}/trained_flow_model.pth')[0]
+        nn_model = glob.glob(f'{folder}/{run_type}_NA{NA}_KT{KT}*/trained_flow_model.pth')[0]
         print(f"Testing model: {nn_model}")
         filename = folder + '/' + nn_model.split('/')[1] + '/'
         networkdims = [8,8,8]
@@ -67,8 +67,11 @@ if __name__ == "__main__":
         def data_expansion(r):
             return assemble_neighbor_features(r, neighborlists).reshape(r.shape[0], r.shape[1], -1)
         
-        glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=networkdims, data_size = 17, data_expansion=data_expansion)
-        flow = MultiStep(glow, 10)
+        if run_type == 'RealNVP':
+            flow = RealNVP(DIM, NA, hidden_dims=networkdims, n_layers=4)
+        elif run_type == 'Glow':
+            glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=networkdims, data_size = 17, data_expansion=data_expansion)
+            flow = MultiStep(glow, 4)
         weights = torch.load(nn_model)
         flow.load_state_dict(weights)
         flow.eval()
@@ -81,17 +84,32 @@ if __name__ == "__main__":
 
         normal = torch.distributions.normal.Normal(0, 1)
 
+        if run_type == 'RealNVP':
+            r_buf = torch.empty((1, NA, DIM))
+            r_coord_buf = torch.empty((1, NA, DIM))
+            t_buf = torch.zeros((1,), dtype=torch.float32)
+        elif run_type == 'Glow':
+            r_buf = torch.empty((1, NA, DIM))
+            p_buf = torch.empty((1, NA, DIM))
+            t_buf = torch.zeros((1,), dtype=torch.float32)
+
         with torch.no_grad():
             for i in range(test_count):
                 if (i+1) % 100 == 0:
                     print(f"Generating sample {i+1}/{test_count}")
                 
                 t0 = time.perf_counter()
-                x = {
-                    'r': Q(normal.sample((1, NA, DIM))) * SIGMA, 
-                    'p': Q(normal.sample((1, NA, DIM))),
-                    't': 0.0
-                    }
+                if run_type == 'RealNVP':
+                    torch.randn(r_buf.shape, out=r_buf)
+                    x = {'r': Q(r_buf) * SIGMA,
+                        'r_coord': torch.tensor(coords, dtype=torch.float32).repeat(1, 1, 1),
+                        't': t_buf}
+                elif run_type == 'Glow':
+                    torch.randn(r_buf.shape, out=r_buf)
+                    torch.randn(p_buf.shape, out=p_buf)
+                    x = {'r': Q(r_buf) * SIGMA,
+                        'p': Q(fix_kT(p_buf, KT)),
+                        't': t_buf}
                 
                 x, _, _ = flow(x)
 
@@ -187,21 +205,22 @@ if __name__ == "__main__":
 
         # Save the dictionary
         torch.save(save_dict, f'{filename}test_results.pt')
+        print(overall_interactions.shape)
         average_interactions.append(overall_interactions.mean(dim=0).numpy())
     
     plt.figure(figsize=(10, 6))
     #there are 6 interaction types, so we will plot the average of each type across all KTs
     average_interactions = torch.tensor(average_interactions)
-    plt.plot(average_interactions[:, 0], label='1st neighbor Ga-Ga')
-    plt.plot(average_interactions[:, 1], label='1st neighbor Ga-As')
-    plt.plot(average_interactions[:, 2], label='1st neighbor As-As')
-    plt.plot(average_interactions[:, 3], label='2nd neighbor Ga-Ga')
-    plt.plot(average_interactions[:, 4], label='2nd neighbor Ga-As')
-    plt.plot(average_interactions[:, 5], label='2nd neighbor As-As')
-    plt.xlabel('Temperature')
+    plt.plot(KTs, average_interactions[:, 0], label='1st neighbor Ga-Ga')
+    plt.plot(KTs, average_interactions[:, 1], label='1st neighbor Ga-As')
+    plt.plot(KTs, average_interactions[:, 2], label='1st neighbor As-As')
+    plt.plot(KTs, average_interactions[:, 3], label='2nd neighbor Ga-Ga')
+    plt.plot(KTs, average_interactions[:, 4], label='2nd neighbor Ga-As')
+    plt.plot(KTs, average_interactions[:, 5], label='2nd neighbor As-As')
+    plt.xlabel('kT')
     plt.ylabel('Average Interaction Count')
     plt.title('Interactions vs Temperature')
     plt.legend()
     plt.tight_layout()
-    plt.savefig(f'{filename}interactions_vs_temperature.png', dpi=150)
+    plt.savefig(f'{folder}/interactions_vs_temperature.png', dpi=150)
     
