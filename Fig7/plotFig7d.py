@@ -1,11 +1,11 @@
-import torch, glob
+import torch, glob, json
 import torch.nn as nn
 import torch.optim as optim
 
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from alchemist.flows import GlowBlock, MultiStep, Q, MultiIndependent, RealNVP
+from alchemist.flows import GlowBlock, MultiStep, Q, RealNVP
 from alchemist.pdbs import read_pdb_coords, write_pdb_trajectory
 from alchemist.neighbors import compute_neighbor_masks, get_neighbor_indices, assemble_neighbor_features
 from alchemist.ml_utils import train_and_summarize
@@ -13,7 +13,7 @@ from alchemist.analysis import compute_neighbor_histograms, compute_energy_param
 
 
 if __name__ == "__main__":
-    plt.figure(figsize=(5, 4))
+    plt.figure(figsize=(5*1.5, 3*1.5))
     #plot energies as a function of Ga composition
     ga_compositions = [1, 0, 0.5, 0.5]
     #strictly ga, as, and perfect alternating ga-as-ga-as
@@ -23,8 +23,8 @@ if __name__ == "__main__":
     N=216
     DIM = 2
     MU = torch.zeros(DIM, dtype=torch.float32)
-    E1 = torch.tensor([[-0.1,-0.5],[-0.5,-0.1]], dtype=torch.float32)
-    E2 = torch.tensor([[-0.05,-0],[-0, -0.05]], dtype=torch.float32)
+    E1 = torch.tensor([[-0.3,-0.5],[-0.5,-0.1]], dtype=torch.float32)
+    E2 = torch.tensor([[-0.05,-0],[-0,-0.05]], dtype=torch.float32)
     coords = read_pdb_coords(PDB_PATH)
     masks = compute_neighbor_masks(coords, BOX, CUTS)
     neighborlists = get_neighbor_indices(masks)
@@ -46,22 +46,26 @@ if __name__ == "__main__":
         assembled = assemble_neighbor_features(r, neighborlists)
         ga_energies.append(compute_energy_parameterized(assembled, MU, E1, E2).sum().item())
         
-    comps = []
-    energies = []
-    for i in ['1', '2', '3', '4', '5', '6', '7', '8', '9']:
-        glowblock_file = f'outputs/only_train_kT{i}/test_results.pt'
-        glowblock_data = torch.load(glowblock_file)
-        last_frame_ga_compositions = glowblock_data['last_Ga_composition']
-        last_frame_energies = glowblock_data['overall_energies']
-        last_frame_avg_comp = last_frame_ga_compositions.mean().item()
-        last_frame_avg_energy = last_frame_energies.mean().item()
+    for j in ['Glow','LeapFrog','RealNVP']:
+        file = f'Fig7/{j}_interactions_vs_temperature.json'
+        data = json.load(open(file, 'r'))
+        interactions = data['interactions']
 
-        comps.append(last_frame_avg_comp)
-        energies.append(last_frame_avg_energy)
-        kT_num = float(glowblock_file.split('/')[1].split('_')[-1][2:])
-        plt.annotate(f'{kT_num-1}', (last_frame_avg_comp, last_frame_avg_energy), xytext=(5, 5), textcoords='offset points')
+        
+        energies = []
+        for i in range(len(interactions)):
+            energy = interactions[i][0] * E1[0,0] * 864 + interactions[i][1] * E1[0,1] * 864 + interactions[i][2] * E1[1,1] * 864 + \
+                     interactions[i][3] * E2[0,0] * 2592 + interactions[i][4] * E2[0,1] * 2592 + interactions[i][5] * E2[1,1] * 2592
+            energies.append(energy)
+        
+        comps = []
+        for i in range(len(interactions)):
+            N_A = interactions[i][0] *864 / 2 + interactions[i][1] * 864 / 4
+            N_B = interactions[i][2] * 864 / 2 + interactions[i][1] * 864 / 4
+            comp = N_A / (N_A + N_B)
+            comps.append(comp)
 
-    plt.plot(comps, energies, color='g', label = 'GlowBlock 3-layer')
+        plt.plot(comps, energies, label = f'{j}')
 
     plt.scatter(ga_compositions[0], ga_energies[0], marker='o',label='All Ga', color='r')
     plt.scatter(ga_compositions[1], ga_energies[1], marker='s',label='All As', color='r')
@@ -74,4 +78,4 @@ if __name__ == "__main__":
     plt.title('Phase Diagram', fontsize=fontsize)
     plt.tight_layout()
     plt.legend()
-    plt.savefig('phase_diagram_energy.png')
+    plt.savefig('Fig7/phase_diagram_energy.png')

@@ -1,4 +1,4 @@
-import torch, glob
+import torch, glob, json
 import time
 import torch.nn as nn
 import torch.optim as optim
@@ -119,7 +119,6 @@ if __name__ == "__main__":
                 t1 = time.perf_counter()
                 last_Ga_frame = p_a_all[-1]
                 last_Ga_composition[i] = last_Ga_frame.mean().item()
-
                 interactions = _compute_interactions(last_Ga_frame, first_pairs, second_pairs)
                 t2 = time.perf_counter()
                 overall_interactions[i] = interactions
@@ -152,8 +151,7 @@ if __name__ == "__main__":
         bin_range = torch.arange(0, 1.01, 0.01)
 
 
-        bin_width = 10
-        #histogram of 1st neighbor interactions
+        #histogram of  neighbor interactions
         plt.figure(figsize=(10, 6))
         plt.hist(overall_interactions[:, 0].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor Ga-Ga')
         plt.hist(overall_interactions[:, 1].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor Ga-As')
@@ -205,7 +203,7 @@ if __name__ == "__main__":
 
         # Save the dictionary
         torch.save(save_dict, f'{filename}test_results.pt')
-        print(overall_interactions.shape)
+        # print(overall_interactions.shape)
         average_interactions.append(overall_interactions.mean(dim=0).numpy())
     
     plt.figure(figsize=(10, 6))
@@ -218,9 +216,17 @@ if __name__ == "__main__":
     plt.plot(KTs, average_interactions[:, 4], label='2nd neighbor Ga-As')
     plt.plot(KTs, average_interactions[:, 5], label='2nd neighbor As-As')
     plt.xlabel('kT')
+    plt.ylim(0, 1)
     plt.ylabel('Average Interaction Count')
     plt.title('Interactions vs Temperature')
     plt.legend()
     plt.tight_layout()
-    plt.savefig(f'{folder}/interactions_vs_temperature.png', dpi=150)
+    plt.savefig(f'{folder}/{run_type}_interactions_vs_temperature.png', dpi=150)
     
+    #save data
+    data = {
+        'KTs': KTs,
+        'interactions': average_interactions.numpy().tolist(),
+    }
+    with open(f'Fig7/{run_type}_interactions_vs_temperature.json', 'w') as f:
+        json.dump(data, f, indent=4)

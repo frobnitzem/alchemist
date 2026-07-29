@@ -263,6 +263,8 @@ def main(runtype = 'RealNVP'):
                 # feat = assemble_neighbor_features(x['r'], neighborlists)
                 # per_atom_energy[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = compute_energy_parameterized(feat, MU, E1, E2)
                 # p_a_all[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = torch.softmax(feat, dim=-1)[..., 0, 0]
+            p_a_all = torch.stack(compositions, dim=0)
+            p_a_all = p_a_all[:,0,:]
         t1 = time.perf_counter()
         
         # per_atom_energy = per_atom_energy.detach()
@@ -298,7 +300,7 @@ def main(runtype = 'RealNVP'):
         # Plot 3: Loss and composition double plot
         fig3, axes3 = plt.subplots(1, 1, figsize=(8, 5))
         #average compositions over batches
-        compositions = torch.stack(compositions, dim=0).detach().numpy() # (EPOCHS, D) -> (EPOCHS,)
+        compositions = torch.stack(compositions, dim=0).mean(dim=(0,1)).detach().numpy() # (EPOCHS, D) -> (EPOCHS,)
         color = 'tab:red'
         
         axes3.set_ylabel('Composition', color=color)
@@ -343,14 +345,41 @@ def main(runtype = 'RealNVP'):
             axes5.set_ylabel('Interaction Count')
             axes5.set_title('Interactions vs Steps')
             # Plot each interaction type
-            axes5.plot(interactions[:,0], label=f'1st neighbor A-A')
-            axes5.plot(interactions[:,1], label=f'1st neighbor A-B')
-            axes5.plot(interactions[:,2], label=f'1st neighbor B-B')
-            axes5.plot(interactions[:,3], label=f'2nd neighbor A-A')
-            axes5.plot(interactions[:,4], label=f'2nd neighbor A-B')
-            axes5.plot(interactions[:,5], label=f'2nd neighbor B-B')
+            axes5.plot(interactions.mean(1)[:,0], label=f'1st neighbor A-A')
+            axes5.plot(interactions.mean(1)[:,1], label=f'1st neighbor A-B')
+            axes5.plot(interactions.mean(1)[:,2], label=f'1st neighbor B-B')
+            axes5.plot(interactions.mean(1)[:,3], label=f'2nd neighbor A-A')
+            axes5.plot(interactions.mean(1)[:,4], label=f'2nd neighbor A-B')
+            axes5.plot(interactions.mean(1)[:,5], label=f'2nd neighbor B-B')
             axes5.legend()
             plt.savefig(f'{output_dir}/interactions_over_steps.png')
+
+            #histogram of  neighbor interactions
+            #overall interactions is from final 1/5 of interactions and flatten along B axis of (frame, B, N)
+            overall_interactions = interactions[-(num_samples//5):].reshape(-1, 6)
+            overall_interactions[:, 0] /= 864
+            overall_interactions[:, 1] /= 864
+            overall_interactions[:, 2] /= 864
+            overall_interactions[:, 3] /= 2592
+            overall_interactions[:, 4] /= 2592
+            overall_interactions[:, 5] /= 2592
+            plt.figure(figsize=(10, 6))
+            bin_range = torch.arange(0, 1.01, 0.01)
+            plt.hist(overall_interactions[:, 0], bins=bin_range, alpha=0.5, label='1st neighbor Ga-Ga')
+            plt.hist(overall_interactions[:, 1], bins=bin_range, alpha=0.5, label='1st neighbor Ga-As')
+            plt.hist(overall_interactions[:, 2], bins=bin_range, alpha=0.5, label='1st neighbor As-As')
+
+            plt.hist(overall_interactions[:, 3], bins=bin_range, alpha=0.5, label='2nd neighbor Ga-Ga')
+            plt.hist(overall_interactions[:, 4], bins=bin_range, alpha=0.5, label='2nd neighbor Ga-As')
+            plt.hist(overall_interactions[:, 5], bins=bin_range, alpha=0.5, label='2nd neighbor As-As')
+            plt.xlabel('Interaction Count')
+            plt.ylabel('Frequency')
+            plt.xlim(0, 1)
+            plt.ylim(0, 3000//10)
+            # plt.title(f'Histogram of Interactions for {nn_model.split("/")[-1].split(".")[0]} (Test Count: {test_count})')
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(f'{output_dir}/interactions_histogram.png', dpi=150)
 
         # 6. Save Trajectory
         # We need Ga percents for the PDB writer
@@ -403,6 +432,9 @@ def main(runtype = 'RealNVP'):
         }
         torch.save(results, f'{output_dir}/results.pt')
 
+        if losses is None:
+            overall_interactions = overall_interactions.mean(0)
+            return overall_interactions, None
         return None, (t1 - t0)/num_samples
     
     print("Starting training...")
@@ -466,8 +498,8 @@ def main(runtype = 'RealNVP'):
             for i in range(B):
                 percent_A = percents_A_forinteractions[i]
                 interactions[i] = _compute_interactions(percent_A, first_pairs, second_pairs) 
-            interactions = interactions.mean(dim=0)
-            percents_A = percents.mean(dim=(0,1))[0]
+            # interactions = interactions.mean(dim=0)
+            percents_A = percents[:,:,0]
             return percents_A, interactions
         output_dir = f'Fig7/LeapFrog_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -493,8 +525,8 @@ def main(runtype = 'RealNVP'):
         t1 = time.perf_counter()
         compositions = vals
         print("Leapfrog training complete. Generating samples and analysis...")
-        graphing(compositions, output_dir, data_gen)[1]
-        return None, t1 - t0
+        overall_interactions, _ = graphing(compositions, output_dir, data_gen)
+        return overall_interactions, t1 - t0
     else:
         assert False, f"Unknown runtype: {runtype}"
     print("Training complete.")
@@ -509,25 +541,35 @@ if __name__ == "__main__":
         #get times for NA = 8, 64, 216, 512
         NA = 216
         KTs = [0.25, 0.5, 1, 2, 4]
-        times_NVP = []
-        times_Glow = []
-        times_LeapFrog = []
+        LeapFrog_interactions = []
         for KT in KTs:
             # K_NVP, time_NVP = main(runtype='RealNVP')
-            K_Glow, time_Glow = main(runtype='Glow')
-            # K_LeapFrog, time_LeapFrog = main(runtype='leapfrog')
+            # K_Glow, time_Glow = main(runtype='Glow')
+            overall_interactions, time_LeapFrog = main(runtype='leapfrog')
 
-            # times_NVP.append(time_NVP)
-            # times_Glow.append(time_Glow)
-            # times_LeapFrog.append(time_LeapFrog)
+            LeapFrog_interactions.append(overall_interactions)
         
-        # Plot the times
-        # fig, ax = plt.subplots(figsize=(6, 4))
-        # ax.plot(KTs, times_NVP, label='RealNVP', marker='o')
-        # ax.plot(KTs, times_Glow, label='Glow', marker='o')
-        # # ax.plot(KTs, times_LeapFrog, label='LeapFrog', marker='o')
-        # ax.set_xlabel('Temperature (KT)')
-        # ax.set_ylabel('Time per Sample (s)')
-        # ax.set_title('Time per Sample vs Temperature')
-        # ax.legend()
-        # fig.savefig(f'Fig7/time_per_sample.png')
+        plt.figure(figsize=(10, 6))
+        #there are 6 interaction types, so we will plot the average of each type across all KTs
+        average_interactions = torch.tensor(LeapFrog_interactions)
+        plt.plot(KTs, average_interactions[:, 0], label='1st neighbor Ga-Ga')
+        plt.plot(KTs, average_interactions[:, 1], label='1st neighbor Ga-As')
+        plt.plot(KTs, average_interactions[:, 2], label='1st neighbor As-As')
+        plt.plot(KTs, average_interactions[:, 3], label='2nd neighbor Ga-Ga')
+        plt.plot(KTs, average_interactions[:, 4], label='2nd neighbor Ga-As')
+        plt.plot(KTs, average_interactions[:, 5], label='2nd neighbor As-As')
+        plt.ylim(0, 1)
+        plt.xlabel('kT')
+        plt.ylabel('Average Interaction Count')
+        plt.title('Interactions vs Temperature')
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(f'Fig7/Leapfrog_interactions_vs_temperature.png', dpi=150)
+        
+        #save data
+        data = {
+            'KTs': KTs,
+            'interactions': [interactions.tolist() for interactions in LeapFrog_interactions],
+        }
+        with open(f'Fig7/LeapFrog_interactions_vs_temperature.json', 'w') as f:
+            json.dump(data, f, indent=4)
