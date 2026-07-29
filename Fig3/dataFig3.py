@@ -1,5 +1,5 @@
 from tkinter import TRUE, X
-import torch, math, copy, time
+import torch, math, copy, time, json
 import torch.optim as optim
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
@@ -13,17 +13,17 @@ from alchemist.ml_utils import train_and_summarize
 from alchemist.analysis import compute_neighbor_histograms, compute_energy_parameterized
 # --- Configuration ---
 CUTS = [2.5, 4.5]
-BATCH_SIZE = 50
-NA = 216
+BATCH_SIZE = 100
+# NA = 216
 DIM = 2
-SIGMA = 1.0
-KT = 0.0257  #note k = 8.617333 *10^-5 eV/K, T = 298.15K, kT = 0.0257 eV but we are using arbitrary units so we can set kT = 1 for simplicity
+# SIGMA = 1
+# KT = 1
 LR = 1e-3
 TRAIN_ITERS = 11
-N_STEPS_FLOW = 10
-EPOCHS = 30
+N_STEPS_FLOW = 4
+EPOCHS = 25
 HIDDEN_DIMS = [8,8,8]
-output_dir = 'outputs/only_train_kT9'
+# output_dir = 'outputs/only_train_kT9'
 
 # Energy Parameters
 MU = torch.tensor([2,3], dtype=torch.float32)
@@ -179,11 +179,13 @@ def main(runtype = 'RealNVP'):
         assembled0 = assemble_neighbor_features(x0['r'], neighborlists)
         energy0 = compute_energy_parameterized(assembled0, MU, E1, E2) #compute_energy_parameterized has a softmax in it
 
-        # energy is (B, N), energy.sum(1) is (B,)
-        # logJ is (B,)
-        # print(energy.sum(1).mean().item(), energy0.sum(1).mean().item(), logJ.mean().item())
-        loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) - logJ
-        return loss.mean()
+        if runtype == 'Glow':
+            bound = 0.5 * (x["r"] / SIGMA).square().sum(dim=(1, 2)) + 0.5 * x["p"].square().sum(dim=(1, 2)) / KT
+        else:
+            bound = (x["r"] / SIGMA).square().sum(dim=(1, 2))
+
+        loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) - logJ + bound
+        return loss.mean(), bound.mean()
 
     def loss_MLE(x0, x, logJ):
         """
@@ -222,62 +224,60 @@ def main(runtype = 'RealNVP'):
 
     def graphing(compositions, output_dir,data_gen, losses = None):
         num_samples = 20
-        per_atom_energy = torch.zeros(num_samples * BATCH_SIZE, NA)
-        p_a_all = torch.zeros(num_samples * BATCH_SIZE, NA)
+        # per_atom_energy = torch.zeros(num_samples * BATCH_SIZE, NA)
+        # p_a_all = torch.zeros(num_samples * BATCH_SIZE, NA)
         
         t0 = time.perf_counter()
         if losses is not None:
             flow.eval()
             with torch.no_grad():
+                p_a_all = torch.empty((num_samples * BATCH_SIZE, NA), dtype=torch.float32)
                 for i in range(num_samples):
-                    if (i+1) % 200 == 0:
-                        print(f"Generating sample {i+1}/{num_samples}")
                     x = data_gen().__next__()
                     x, _, _ = flow(x)
-                    feat = assemble_neighbor_features(x['r'], neighborlists)
-                    per_atom_energy[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = compute_energy_parameterized(feat, MU, E1, E2)
-                    p_a_all[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = torch.softmax(feat, dim=-1)[..., 0, 0]
+                    # feat = assemble_neighbor_features(x['r'], neighborlists)
+                    # per_atom_energy[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = compute_energy_parameterized(feat, MU, E1, E2)
+                    # p_a_all[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = torch.softmax(feat, dim=-1)[..., 0, 0]
+                    p_a_all[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = torch.softmax(x['r'], dim=-1)[..., 0]
+            p_A_overall = p_a_all.mean().item()
                     
         else: 
-            for i in range(num_samples):
-                if (i+1) % 200 == 0:
-                    print(f"Generating sample {i+1}/{num_samples}")
-                x = data_gen().__next__()
-                x, _, _ = flow(x)
-                feat = assemble_neighbor_features(x['r'], neighborlists)
-                per_atom_energy[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = compute_energy_parameterized(feat, MU, E1, E2)
-                p_a_all[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = torch.softmax(feat, dim=-1)[..., 0, 0]
+            last_compositions = torch.stack(compositions, dim=0).detach()[int(len(compositions)*4/5):] #(num_samples, D)
+            # feat = assemble_neighbor_features(x['r'], neighborlists)
+            # per_atom_energy[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = compute_energy_parameterized(feat, MU, E1, E2)
+            # p_a_all[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = torch.softmax(feat, dim=-1)[..., 0, 0]
+            p_A_overall = last_compositions.mean().item()
         t1 = time.perf_counter()
         
-        per_atom_energy = per_atom_energy.detach()
-        p_a_all = p_a_all.detach()
+        # per_atom_energy = per_atom_energy.detach()
+        # p_a_all = p_a_all.detach()
 
-        flat_energy = per_atom_energy.flatten()
-        flat_p_a = p_a_all.flatten()
+        # # flat_energy = per_atom_energy.flatten()
+        # flat_p_a = p_a_all.flatten()
         
-        fig2, axes2 = plt.subplots(2, 2, figsize=(12, 10))
+        # fig2, axes2 = plt.subplots(2, 2, figsize=(12, 10))
         
         # (0,0) 2D Histogram: p_a vs Energy
-        axes2[0,0].hist2d(flat_p_a.numpy(), flat_energy.numpy(), bins=30)
-        axes2[0,0].set_title("Energy vs Composition (p_a)")
-        axes2[0,0].set_xlabel("p_a")
-        axes2[0,0].set_ylabel("Energy")
+        # axes2[0,0].hist2d(flat_p_a.numpy(), flat_energy.numpy(), bins=30)
+        # axes2[0,0].set_title(f"Energy vs Composition with {runtype} Flow, NA={NA}, kT={KT}")
+        # axes2[0,0].set_xlabel("p_a")
+        # axes2[0,0].set_ylabel("Energy")
         
-        # (0,1) Marginal: Energy Distribution
-        axes2[0,1].hist(flat_energy.numpy(), bins=30)
-        axes2[0,1].set_title("Energy Marginal")
-        axes2[0,1].set_xlabel("Energy")
+        # # (0,1) Marginal: Energy Distribution
+        # axes2[0,1].hist(flat_energy.numpy(), bins=30)
+        # axes2[0,1].set_title(f"Energy Marginal with {runtype} Flow, NA={NA}, kT={KT}")
+        # axes2[0,1].set_xlabel("Energy")
         
-        # (1,0) Marginal: p_a Distribution
-        argmax_p_a = (flat_p_a > 0.5).float()
-        axes2[1,0].hist(flat_p_a.numpy(), bins=30)
-        axes2[1,0].set_title(f"Composition Marginal: AVG p_a = {argmax_p_a.mean().item():.3f}")
-        axes2[1,0].set_xlabel("p_a")
+        # # (1,0) Marginal: p_a Distribution
+        # argmax_p_a = (flat_p_a > 0.5).float()
+        # axes2[1,0].hist(flat_p_a.numpy(), bins=30)
+        # axes2[1,0].set_title(f"Composition Marginal: AVG p_a = {argmax_p_a.mean().item():.3f}")
+        # axes2[1,0].set_xlabel("p_a")
         
-        axes2[1,1].axis('off') # Empty panel
+        # axes2[1,1].axis('off') # Empty panel
         
-        plt.tight_layout()
-        plt.savefig(f'{output_dir}/energy_analysis.png')
+        # plt.tight_layout()
+        # plt.savefig(f'{output_dir}/energy_analysis.png')
 
         # Plot 3: Loss and composition double plot
         fig3, axes3 = plt.subplots(1, 1, figsize=(8, 5))
@@ -293,68 +293,71 @@ def main(runtype = 'RealNVP'):
             losses = torch.tensor(losses).detach().numpy() # (EPOCHS, 2) -> (EPOCHS, 2)
             all_losses = losses[:, 0]
             lJ_losses = -losses[:, 1]
-            U_losses = all_losses - lJ_losses
+            boundary_losses = losses[:,2]
+            U_losses = all_losses - lJ_losses - boundary_losses
 
             axes4 = axes3.twinx()  # instantiate a second Axes that shares the same x-axis
             color = 'tab:blue'
             axes4.set_ylabel('Loss', color=color)
             axes4.plot(all_losses, color=color, label='Total Loss')
-            axes4.plot(lJ_losses, color='tab:orange', label='Log-Jacobians')
-            axes4.plot(U_losses, color='tab:green', label='Energy')
+            axes4.plot(lJ_losses, color='tab:orange', label='-logJ')
+            axes4.plot(U_losses, color='tab:green', label=r"$\Delta U$/kT")
+            axes4.plot(boundary_losses, color='tab:purple', label='Boundary Loss')
             axes4.tick_params(axis='y', labelcolor=color)
             axes4.legend()
-            axes3.set_title("Loss and Composition Analysis")
+            axes3.set_title(f"Loss and Composition Analysis with {runtype} Flow, NA={NA}, kT={KT}")
         else:
-            axes3.scatter((torch.arange(compositions.shape[0])+1)*200, compositions, color=color)
+            axes3.scatter((torch.arange(compositions.shape[0])+1)*10, compositions, color=color)
             axes3.set_xlabel('Time step (dt)')
-            axes3.set_title("Composition Analysis")
+            axes3.set_title(f"Composition Analysis with {runtype} Flow, NA={NA}, kT={KT}")
+        
+        axes3.set_ylim(0, 1)
 
         fig3.tight_layout()  # otherwise the right y-label is slightly clipped
         plt.savefig(f'{output_dir}/ Composition_and_Loss_Analysis.png')
 
         # 6. Save Trajectory
         # We need Ga percents for the PDB writer
-        ga_percents = p_a_all
-        as_percents = 1.0 - p_a_all
-        #downsample by factor of 10
-        ga_percents = ga_percents[::50]
-        as_percents = as_percents[::50]
-        write_pdb_trajectory(Path(f'{output_dir}/generated_samples.pdb'), coords, ga_percents, as_percents)
+        # ga_percents = p_a_all
+        # as_percents = 1.0 - p_a_all
+        # #downsample by factor of 10
+        # ga_percents = ga_percents[::50]
+        # as_percents = as_percents[::50]
+        # write_pdb_trajectory(Path(f'{output_dir}/generated_samples.pdb'), coords, ga_percents, as_percents)
 
         # 7. Save model
         if losses is not None:
             torch.save(flow.state_dict(), f'{output_dir}/trained_flow_model.pth')
 
         # 8. Save configuration
-        config = {
-            'PDB_PATH': str(PDB_PATH),
-            'BOX': BOX.tolist(),
-            'CUTS': CUTS,
-            'BATCH_SIZE': BATCH_SIZE,
-            'NA': NA,
-            'DIM': DIM,
-            'SIGMA': SIGMA,
-            'KT': KT,
-            'LR': LR,
-            'TRAIN_ITERS': TRAIN_ITERS,
-            'N_STEPS_FLOW': N_STEPS_FLOW,
-            'EPOCHS': EPOCHS,
-            'MU': MU.tolist(),
-            'E1': E1.tolist(),
-            'E2': E2.tolist()
-        }
-        with open(f'{output_dir}/config.txt', 'w') as f:
-            for key, value in config.items():
-                f.write(f"{key}: {value}\n")
+        # config = {
+        #     'PDB_PATH': str(PDB_PATH),
+        #     'BOX': BOX.tolist(),
+        #     'CUTS': CUTS,
+        #     'BATCH_SIZE': BATCH_SIZE,
+        #     'NA': NA,
+        #     'DIM': DIM,
+        #     'SIGMA': SIGMA,
+        #     'KT': KT,
+        #     'LR': LR,
+        #     'TRAIN_ITERS': TRAIN_ITERS,
+        #     'N_STEPS_FLOW': N_STEPS_FLOW,
+        #     'EPOCHS': EPOCHS,
+        #     'MU': MU.tolist(),
+        #     'E1': E1.tolist(),
+        #     'E2': E2.tolist()
+        # }
+        # with open(f'{output_dir}/config.txt', 'w') as f:
+        #     for key, value in config.items():
+        #         f.write(f"{key}: {value}\n")
 
-        print("Results saved to output directory:", output_dir)
-        p_A_overall = p_a_all.mean().item()
+        # print("Results saved to output directory:", output_dir)
+        
         try:
             K = (1 - p_A_overall)/p_A_overall
         except ZeroDivisionError:
             K = 10
-
-        del p_A_overall, p_a_all, per_atom_energy, flat_energy, flat_p_a
+            
         torch.cuda.empty_cache()
 
         #save results
@@ -415,79 +418,94 @@ def main(runtype = 'RealNVP'):
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         def U(r, t):
             percents = torch.softmax(r, dim=-1)
-            return MU[0]*percents[..., 0].sum(dim=-1) + MU[1]*percents[..., 1].sum(dim=-1) + (r*r).sum((-2,-1))/(2*SIGMA**2)
+            return MU[0]*percents[..., 0].sum(dim=-1) + MU[1]*percents[..., 1].sum(dim=-1) + KT*(r*r).sum((-2,-1))/(2*SIGMA**2)
         
-        flow = LeapFrog(U, const_kT = KT)
+        flow = LeapFrog(U, const_kT = KT, dt = leapfrogdt)
         vals = []
         x0 = next(data_gen())
         x = copy.deepcopy(x0)
         logJ = 0.0
         
-        for epoch in range(100000):
+        if run_times == True:
+            t0 = time.perf_counter()
+        for epoch in range(3000):
             x_new, lJ, info = flow(x)
             logJ += lJ.detach()
             x = {k: v.detach().requires_grad_(True) for k, v in x_new.items()}
-            if (epoch+1) % 2000 == 0:
-                print(f"Leapfrog training epoch {epoch+1}/100000")
+            if (epoch+1) % 10 == 0:
+                print(f"Leapfrog training epoch {epoch+1}/3000")
                 feat = feature_extractor(x)
-                vals.append(feat)
+                vals.append(feat.detach())
         compositions = vals
+        if run_times == True:
+            t1 = time.perf_counter()
+            return 0, (t1 - t0)
         return graphing(compositions, output_dir, data_gen)
     else:
         assert False, f"Unknown runtype: {runtype}"
     print("Training complete.")
 
 if __name__ == "__main__":
-    SIGMA = 10
-    if TRUE:
-        KT = 0.02569  #note k = 8.617333 *10^-5 eV/K, T = 298.15K, kT = 0.0257 eV but we are using arbitrary units so we can set kT = 1 for simplicity
-        output_dir = 'outputs/only_train_kT9'
-
+    SIGMA = 5
+    if False:
         Ks_NVP = []
         Ks_Glow = []
         Ks_LeapFrog = []
 
-        KTs = [round(0.02569*0.25,5), round(0.02569*0.5,5), round(0.02569,5), round(0.02569*2,5), round(0.02569*4,5)]
+        #has units kT
+        KTs = [0.25, 0.5, 1.0, 2.0, 4.0] #scale should be 1/kT from 0 to 4
+        NA = 216
+        leapfrogdts = [0.5, 0.5, 0.5, 0.5, 0.5]
 
-        for i, KT in enumerate(KTs):
-            # K_LeapFrog, time_LeapFrog = main(runtype='leapfrog')
-            K_Glow, time_Glow = main(runtype='Glow')
-            K_NVP, time_NVP = main(runtype='RealNVP')
-            
+        makedata = True
 
-            Ks_NVP.append(K_NVP)
-            Ks_Glow.append(K_Glow)
-            # Ks_LeapFrog.append(K_LeapFrog)
+        if makedata:
+            for i, KT in enumerate(KTs):
+                leapfrogdt = leapfrogdts[i]
+                K_LeapFrog, time_LeapFrog = main(runtype='leapfrog')
+                K_Glow, time_Glow = main(runtype='Glow')
+                K_NVP, time_NVP = main(runtype='RealNVP')
+                
+                Ks_NVP.append(K_NVP)
+                Ks_Glow.append(K_Glow)
+                Ks_LeapFrog.append(K_LeapFrog)
 
-        #vant hoff plot
+            #simulation results
+            lnK_NVP = torch.log(torch.tensor(Ks_NVP, dtype=torch.float32))
+            lnK_Glow = torch.log(torch.tensor(Ks_Glow, dtype=torch.float32))
+            lnK_LeapFrog = torch.log(torch.tensor(Ks_LeapFrog, dtype=torch.float32))
+        else: #load data from json
+            with open('Fig3/vant_hoff_data.json', 'r') as f:
+                vant_hoff_data = json.load(f)
+            lnK_NVP = torch.tensor(vant_hoff_data['lnK_NVP'], dtype=torch.float32)
+            lnK_Glow = torch.tensor(vant_hoff_data['lnK_Glow'], dtype=torch.float32)
+            lnK_LeapFrog = torch.tensor(vant_hoff_data['lnK_LeapFrog'], dtype=torch.float32)
+        # raise SystemExit("Finished running all KTs, exiting before plotting.")
+
         fig, ax = plt.subplots(figsize=(6, 4))
-        T = 1 / torch.tensor(KTs, dtype=torch.float32)
-
-        #simulation results
-        lnK_NVP = torch.log(torch.tensor(Ks_NVP, dtype=torch.float32))
-        lnK_Glow = torch.log(torch.tensor(Ks_Glow, dtype=torch.float32))
-        # lnK_LeapFrog = torch.log(torch.tensor(Ks_LeapFrog, dtype=torch.float32))
-        ax.scatter(T.numpy(), lnK_NVP.numpy(), label='RealNVP', color='b')
-        ax.scatter(T.numpy(), lnK_Glow.numpy(), label='Glow', color='g')
-        # ax.scatter(T.numpy(), lnK_LeapFrog.numpy(), label='LeapFrog', color='r')
+        one_kT = 1 / torch.tensor(KTs, dtype=torch.float32)
+        
+        ax.scatter(one_kT.numpy(), lnK_NVP.numpy(), label='RealNVP', color='b')
+        ax.scatter(one_kT.numpy(), lnK_Glow.numpy(), label='Glow', color='g')
+        ax.scatter(one_kT.numpy(), lnK_LeapFrog.numpy(), label='LeapFrog', color='r')
 
         #calculate fit lines for each method
-        coeffs_NVP = np.polyfit(T.numpy(), lnK_NVP.numpy(), 1)
-        coeffs_Glow = np.polyfit(T.numpy(), lnK_Glow.numpy(), 1)
-        # coeffs_LeapFrog = np.polyfit(T.numpy(), lnK_LeapFrog.numpy(), 1)
-        fit_line_NVP = np.polyval(coeffs_NVP, T.numpy())
-        fit_line_Glow = np.polyval(coeffs_Glow, T.numpy())
-        # fit_line_LeapFrog = np.polyval(coeffs_LeapFrog, T.numpy())
+        coeffs_NVP = np.polyfit(one_kT.numpy(), lnK_NVP.numpy(), 1)
+        coeffs_Glow = np.polyfit(one_kT.numpy(), lnK_Glow.numpy(), 1)
+        coeffs_LeapFrog = np.polyfit(one_kT.numpy(), lnK_LeapFrog.numpy(), 1)
+        fit_line_NVP = np.polyval(coeffs_NVP, one_kT.numpy())
+        fit_line_Glow = np.polyval(coeffs_Glow, one_kT.numpy())
+        fit_line_LeapFrog = np.polyval(coeffs_LeapFrog, one_kT.numpy())
 
         #draw fit lines for each method
-        ax.plot(T.numpy(), fit_line_NVP, label='RealNVP Fit: ' + f'{coeffs_NVP[0]:.2f}x + {coeffs_NVP[1]:.2f}', color='b', linestyle='--')
-        ax.plot(T.numpy(), fit_line_Glow, label='Glow Fit: ' + f'{coeffs_Glow[0]:.2f}x + {coeffs_Glow[1]:.2f}', color='g', linestyle='--')
-        # ax.plot(T.numpy(), fit_line_LeapFrog, label='LeapFrog Fit: ' + f'{coeffs_LeapFrog[0]:.2f}x + {coeffs_LeapFrog[1]:.2f}', color='r', linestyle='--')
+        ax.plot(one_kT.numpy(), fit_line_NVP, label='RealNVP Fit: ' + f'{coeffs_NVP[0]:.2f}x + {coeffs_NVP[1]:.2f}', color='b', linestyle='--')
+        ax.plot(one_kT.numpy(), fit_line_Glow, label='Glow Fit: ' + f'{coeffs_Glow[0]:.2f}x + {coeffs_Glow[1]:.2f}', color='g', linestyle='--')
+        ax.plot(one_kT.numpy(), fit_line_LeapFrog, label='LeapFrog Fit: ' + f'{coeffs_LeapFrog[0]:.2f}x + {coeffs_LeapFrog[1]:.2f}', color='r', linestyle='--')
 
         #thoeretical results
-        lnK_theory = -(MU[1] - MU[0]) * T
+        lnK_theory = -(MU[1] - MU[0]) * one_kT/2
         print("Theoretical lnK values:", lnK_theory.numpy())
-        ax.plot(T.numpy(), lnK_theory.numpy(), label='Theory', linestyle='-', color='k') 
+        ax.plot(one_kT.numpy(), lnK_theory.numpy(), label='Theory', linestyle='-', color='k') 
 
         ax.set_xlabel('1/kT')
         ax.set_ylabel('ln(K)')
@@ -501,32 +519,70 @@ if __name__ == "__main__":
         ax.legend(scatter_handles + fit_handles + theory_handles, labels=labels)
 
         fig.savefig(f'Fig3/vant_hoff_plot.png')
+        #save to a dict
+        vant_hoff_data = {
+            '1/kT': one_kT.tolist(),
+            'lnK_NVP': lnK_NVP.tolist(),
+            'lnK_Glow': lnK_Glow.tolist(),
+            'lnK_LeapFrog': lnK_LeapFrog.tolist(),
+            'lnK_theory': lnK_theory.tolist()
+        }
+        #save as json
+        import json
+        with open('Fig3/vant_hoff_data.json', 'w') as f:
+            json.dump(vant_hoff_data, f, indent=4)
 
-    if False:
-        EPOCHS = 20
+    #can only do this if other is False
+    if True:
+        leapfrogdt = 0.5
+        run_times = True
         #times plot
         #get times for NA = 8, 64, 216, 512
         NAs = [64, 216, 512] #512
-        KT = 0.0257
-        times_NVP = []
-        times_Glow = []
-        times_LeapFrog = []
-        for NA in NAs:
-            K_Glow, time_Glow = main(runtype='Glow')
-            K_LeapFrog, time_LeapFrog = main(runtype='leapfrog')
-            K_NVP, time_NVP = main(runtype='RealNVP')
+        KT = 1
 
-            times_NVP.append(time_NVP)
-            times_Glow.append(time_Glow)
-            times_LeapFrog.append(time_LeapFrog)
+        makedata = True
+
+        if makedata:
+            times_NVP = []
+            times_Glow = []
+            times_LeapFrog = []
+            for NA in NAs:
+                    
+                K_Glow, time_Glow = main(runtype='Glow')
+                K_LeapFrog, time_LeapFrog = main(runtype='leapfrog')
+                K_NVP, time_NVP = main(runtype='RealNVP')
+
+                times_NVP.append(time_NVP)
+                times_Glow.append(time_Glow)
+                times_LeapFrog.append(time_LeapFrog)
+        else: #load data from json
+            with open('Fig3/time_data.json', 'r') as f:
+                time_data = json.load(f)
+            times_NVP = time_data['times_NVP']
+            times_Glow = time_data['times_Glow']
+            times_LeapFrog = time_data['times_LeapFrog']
         
         # Plot the times
         fig, ax = plt.subplots(figsize=(6, 4))
         ax.plot(NAs, times_NVP, label='RealNVP', marker='o')
         ax.plot(NAs, times_Glow, label='Glow', marker='o')
         ax.plot(NAs, times_LeapFrog, label='LeapFrog', marker='o')
+        #log scale in y as it is so much slower for leapfrog
+        ax.set_yscale('log')
         ax.set_xlabel('Number of Atoms (NA)')
         ax.set_ylabel('Time per Sample (s)')
         ax.set_title('Time per Sample vs Number of Atoms')
         ax.legend()
         fig.savefig(f'Fig3/time_per_sample.png')
+
+        #save to a dict
+        time_data = {
+            'NAs': NAs,
+            'times_NVP': times_NVP,
+            'times_Glow': times_Glow,
+            'times_LeapFrog': times_LeapFrog
+        }
+        #save as json
+        with open('Fig3/time_data.json', 'w') as f:
+            json.dump(time_data, f, indent=4)

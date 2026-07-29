@@ -53,12 +53,12 @@ def train_and_summarize(
             feat = feature_extractor(x)
             all_features.append(feat)
 
-            loss = loss_fn(x0, x, lJ)
+            loss, boundary_loss = loss_fn(x0, x, lJ)
 
             if torch.isnan(loss) or torch.isinf(loss):
                 raise RuntimeError(f"Loss is NaN/Inf at epoch {epoch}")
             
-            losses.append([loss.mean().item(),lJ.mean().item()])
+            losses.append([loss.mean().item(),lJ.mean().item(),boundary_loss.mean().item()])
             # if losses[-1] > 1e6:
             #     print(x0)
             #     raise RuntimeError(f"Loss is too large at epoch {epoch}: {losses[-1]}")

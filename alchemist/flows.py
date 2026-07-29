@@ -292,13 +292,16 @@ class RealNVP(nn.Module):
         # Split dimension in half
         self.split = NA // 2
 
-        # Build 10 independent coupling layers
-        self.s_net = self.make_net((DIM+3)*self.split+1, hidden_dims, (self.split)*DIM)
-        self.t_net = self.make_net((DIM+3)*self.split+1, hidden_dims, (self.split)*DIM)
+        self.s_netr = self.make_net((DIM+3)*self.split+1, hidden_dims, (self.split)*DIM)
+        self.t_netr = self.make_net((DIM+3)*self.split+1, hidden_dims, (self.split)*DIM)
+        self.s_netl = self.make_net((DIM+3)*self.split+1, hidden_dims, (self.split)*DIM)
+        self.t_netl = self.make_net((DIM+3)*self.split+1, hidden_dims, (self.split)*DIM)
 
         # Initialize final layer to zero (same as GlowBlock)
-        self.initialize_coupling_net(self.s_net)
-        self.initialize_coupling_net(self.t_net)
+        self.initialize_coupling_net(self.s_netr)
+        self.initialize_coupling_net(self.t_netr)
+        self.initialize_coupling_net(self.s_netl)
+        self.initialize_coupling_net(self.t_netl)
 
     def make_net(self, in_dim, hidden_dims, out_dim):
         layers = []
@@ -344,8 +347,12 @@ class RealNVP(nn.Module):
             # Compute s,t
             t = x['t'].expand(r1.size(0))  # now shape (B,)
             r1_time = torch.cat([r1, t[:, None].expand(-1, 1)], dim=-1)
-            s = self.s_net(r1_time).clamp(-4, 4)
-            t = self.t_net(r1_time)
+            if i % 2 == 0:
+                s = self.s_netr(r1_time).clamp(-4, 4)
+                t = self.t_netr(r1_time)
+            else:
+                s = self.s_netl(r1_time).clamp(-4, 4)
+                t = self.t_netl(r1_time)
 
             if inverse:
                 r2 = (r2 - t) * torch.exp(-s)

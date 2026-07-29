@@ -40,15 +40,15 @@ def _compute_interactions(last_ga_frame, first_pairs, second_pairs):
 
 if __name__ == "__main__":
     CUTS = [2.5, 4.5]
-    test_count = 10000
+    test_count = 1000
     DIM = 2
     SIGMA = 1
-    scale = test_count // 5
+    scale = test_count // 2
     folder = 'Fig7'
-    run_type = 'RealNVP'
+    run_type = 'Glow'
     NA = 216
     average_interactions = []
-    KTs = [0.002569,0.02569,0.2569]
+    KTs = [0.25, 0.5, 1, 2, 4]
     for KT in KTs:
         nn_model = glob.glob(f'{folder}/{run_type}_NA{NA}_KT{KT}*/trained_flow_model.pth')[0]
         print(f"Testing model: {nn_model}")

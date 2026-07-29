@@ -1,5 +1,5 @@
 from tkinter import X
-import torch, math, copy, time
+import torch, math, copy, time, json
 import torch.optim as optim
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
@@ -15,24 +15,24 @@ from alchemist.analysis import compute_neighbor_histograms, compute_energy_param
 PDB_PATH = Path('examples/GaAs/GaAs.pdb')
 
 CUTS = [2.5, 4.5]
-BATCH_SIZE = 50
-NA = 216
+BATCH_SIZE = 100
+# NA = 216
 DIM = 2
-SIGMA = 10.0
-KT = 0.0257  #note k = 8.617333 *10^-5 eV/K, T = 298.15K, kT = 0.0257 eV but we are using arbitrary units so we can set kT = 1 for simplicity
+# SIGMA = 10.0
+# KT = 0.0257  #note k = 8.617333 *10^-5 eV/K, T = 298.15K, kT = 0.0257 eV but we are using arbitrary units so we can set kT = 1 for simplicity
 LR = 1e-3
-TRAIN_ITERS = 10
+TRAIN_ITERS = 11
 N_STEPS_FLOW = 4
-EPOCHS = 30
+EPOCHS = 25
 HIDDEN_DIMS = [8,8,8]
-output_dir = 'outputs/only_train_kT9'
+# output_dir = 'outputs/only_train_kT9'
 
 # Energy Parameters
 MU = torch.tensor([0,0], dtype=torch.float32)
-# E1 = torch.tensor([[-0.3,-0.5],[-0.5,-0.1]], dtype=torch.float32)
-# E2 = torch.tensor([[-0.15,-0],[-0,-0.05]], dtype=torch.float32)
-E1 = torch.tensor([[-0.1,-0.5],[-0.5,-0.1]], dtype=torch.float32)
+E1 = torch.tensor([[-0.3,-0.5],[-0.5,-0.1]], dtype=torch.float32)
 E2 = torch.tensor([[-0.05,-0],[-0,-0.05]], dtype=torch.float32)
+# E1 = torch.tensor([[-0.1,-0.5],[-0.5,-0.1]], dtype=torch.float32)
+# E2 = torch.tensor([[-0.05,-0],[-0,-0.05]], dtype=torch.float32)
 
 def main(runtype = 'RealNVP'):
     PDB_PATH = Path(f'examples/GaAs/GaAs{NA}.pdb')
@@ -184,10 +184,17 @@ def main(runtype = 'RealNVP'):
         assembled0 = assemble_neighbor_features(x0['r'], neighborlists)
         energy0 = compute_energy_parameterized(assembled0, MU, E1, E2) #compute_energy_parameterized has a softmax in it
 
+        if runtype == 'Glow':
+            bound = 0.5 * (x["r"] / SIGMA).square().sum(dim=(1, 2)) + 0.5 * x["p"].square().sum(dim=(1, 2)) / KT
+        else:
+            bound = (x["r"] / SIGMA).square().sum(dim=(1, 2))
+
+        loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) - logJ + bound
+        
         # energy is (B, N), energy.sum(1) is (B,)
         # logJ is (B,)
-        loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) - logJ
-        return loss.mean()
+        # loss = 1 / KT * (energy.sum(1) - energy0.sum(1)) - logJ
+        return loss.mean(), bound.mean()
 
     def loss_MLE(x0, x, logJ):
         """
@@ -226,140 +233,152 @@ def main(runtype = 'RealNVP'):
 
     def graphing(compositions, output_dir,data_gen, losses = None):
         num_samples = 20
-        per_atom_energy = torch.zeros(num_samples * BATCH_SIZE, NA)
-        p_a_all = torch.zeros(num_samples * BATCH_SIZE, NA)
+        # per_atom_energy = torch.zeros(num_samples * BATCH_SIZE, NA)
+        # p_a_all = torch.zeros(num_samples * BATCH_SIZE, NA)
         
         t0 = time.perf_counter()
         if losses is not None:
             flow.eval()
+            p_a_all = torch.empty((num_samples * BATCH_SIZE, NA), dtype=torch.float32)
             with torch.no_grad():
                 for i in range(num_samples):
                     if (i+1) % 200 == 0:
                         print(f"Generating sample {i+1}/{num_samples}")
                     x = data_gen().__next__()
                     x, _, _ = flow(x)
-                    feat = assemble_neighbor_features(x['r'], neighborlists)
-                    per_atom_energy[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = compute_energy_parameterized(feat, MU, E1, E2)
-                    p_a_all[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = torch.softmax(feat, dim=-1)[..., 0, 0]
+                    # feat = assemble_neighbor_features(x['r'], neighborlists)
+                    # per_atom_energy[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = compute_energy_parameterized(feat, MU, E1, E2)
+                    # p_a_all[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = torch.softmax(feat, dim=-1)[..., 0, 0]
+                    p_a_all[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = torch.softmax(x['r'], dim=-1)[..., 0]
                     
         else: 
-            for i in range(num_samples):
-                if (i+1) % 200 == 0:
-                    print(f"Generating sample {i+1}/{num_samples}")
-                x = data_gen().__next__()
+            x = data_gen().__next__()
+            num_samples = 1
+            for i in range(3000):
+                # if (i+1) % 200 == 0:
+                #     print(f"Generating sample {i+1}/{num_samples}")
                 x, _, _ = flow(x)
-                feat = assemble_neighbor_features(x['r'], neighborlists)
-                per_atom_energy[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = compute_energy_parameterized(feat, MU, E1, E2)
-                p_a_all[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = torch.softmax(feat, dim=-1)[..., 0, 0]
+                x = {k: v.detach().requires_grad_(True) for k, v in x_new.items()}
+                # feat = assemble_neighbor_features(x['r'], neighborlists)
+                # per_atom_energy[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = compute_energy_parameterized(feat, MU, E1, E2)
+                # p_a_all[i*BATCH_SIZE:(i+1)*BATCH_SIZE] = torch.softmax(feat, dim=-1)[..., 0, 0]
+
         t1 = time.perf_counter()
         
-        per_atom_energy = per_atom_energy.detach()
-        p_a_all = p_a_all.detach()
+        # per_atom_energy = per_atom_energy.detach()
+        # p_a_all = p_a_all.detach()
 
-        flat_energy = per_atom_energy.flatten()
-        flat_p_a = p_a_all.flatten()
+        # flat_energy = per_atom_energy.flatten()
+        # flat_p_a = p_a_all.flatten()
         
-        fig2, axes2 = plt.subplots(2, 2, figsize=(12, 10))
+        # fig2, axes2 = plt.subplots(2, 2, figsize=(12, 10))
         
-        # (0,0) 2D Histogram: p_a vs Energy
-        axes2[0,0].hist2d(flat_p_a.numpy(), flat_energy.numpy(), bins=30)
-        axes2[0,0].set_title("Energy vs Composition (p_a)")
-        axes2[0,0].set_xlabel("p_a")
-        axes2[0,0].set_ylabel("Energy")
+        # # (0,0) 2D Histogram: p_a vs Energy
+        # axes2[0,0].hist2d(flat_p_a.numpy(), flat_energy.numpy(), bins=30)
+        # axes2[0,0].set_title("Energy vs Composition (p_a)")
+        # axes2[0,0].set_xlabel("p_a")
+        # axes2[0,0].set_ylabel("Energy")
         
-        # (0,1) Marginal: Energy Distribution
-        axes2[0,1].hist(flat_energy.numpy(), bins=30)
-        axes2[0,1].set_title("Energy Marginal")
-        axes2[0,1].set_xlabel("Energy")
+        # # (0,1) Marginal: Energy Distribution
+        # axes2[0,1].hist(flat_energy.numpy(), bins=30)
+        # axes2[0,1].set_title("Energy Marginal")
+        # axes2[0,1].set_xlabel("Energy")
         
-        # (1,0) Marginal: p_a Distribution
-        argmax_p_a = (flat_p_a > 0.5).float()
-        axes2[1,0].hist(flat_p_a.numpy(), bins=30)
-        axes2[1,0].set_title(f"Composition Marginal: AVG p_a = {argmax_p_a.mean().item():.3f}")
-        axes2[1,0].set_xlabel("p_a")
+        # # (1,0) Marginal: p_a Distribution
+        # argmax_p_a = (flat_p_a > 0.5).float()
+        # axes2[1,0].hist(flat_p_a.numpy(), bins=30)
+        # axes2[1,0].set_title(f"Composition Marginal: AVG p_a = {argmax_p_a.mean().item():.3f}")
+        # axes2[1,0].set_xlabel("p_a")
         
-        axes2[1,1].axis('off') # Empty panel
+        # axes2[1,1].axis('off') # Empty panel
         
-        plt.tight_layout()
-        plt.savefig(f'{output_dir}/energy_analysis.png')
+        # plt.tight_layout()
+        # plt.savefig(f'{output_dir}/energy_analysis.png')
 
         # Plot 3: Loss and composition double plot
         fig3, axes3 = plt.subplots(1, 1, figsize=(8, 5))
         #average compositions over batches
         compositions = torch.stack(compositions, dim=0).detach().numpy() # (EPOCHS, D) -> (EPOCHS,)
         color = 'tab:red'
-        axes3.set_xlabel('Batch')
+        
         axes3.set_ylabel('Composition', color=color)
-        axes3.scatter(range(compositions.shape[0]), compositions, color=color)
-
-        axes4 = axes3.twinx()  # instantiate a second Axes that shares the same x-axis
+        
         if losses is not None:
+            axes3.scatter(range(compositions.shape[0]), compositions, color=color)
+
+            axes3.set_xlabel('Batch')
             losses = torch.tensor(losses).detach().numpy() # (EPOCHS, 2) -> (EPOCHS, 2)
             all_losses = losses[:, 0]
             lJ_losses = -losses[:, 1]
-            U_losses = all_losses - lJ_losses
+            boundary_losses = losses[:,2]
+            U_losses = all_losses - lJ_losses - boundary_losses
 
             axes4 = axes3.twinx()  # instantiate a second Axes that shares the same x-axis
             color = 'tab:blue'
             axes4.set_ylabel('Loss', color=color)
             axes4.plot(all_losses, color=color, label='Total Loss')
-            axes4.plot(lJ_losses, color='tab:orange', label='Log-Jacobians')
-            axes4.plot(U_losses, color='tab:green', label='Energy')
+            axes4.plot(lJ_losses, color='tab:orange', label='-logJ')
+            axes4.plot(U_losses, color='tab:green', label=r'$\Delta U$/kT')
+            axes4.plot(boundary_losses, color='tab:purple', label='Boundary Loss')
             axes4.tick_params(axis='y', labelcolor=color)
             axes4.legend()
-            axes3.set_title("Loss and Composition Analysis")
+            axes3.set_title(f"Loss and Composition Analysis with {runtype} Flow, NA={NA}, kT={KT}")
         else:
-            axes3.set_title("Composition Analysis")
+            axes3.scatter((torch.arange(compositions.shape[0])+1)*10, compositions, color=color)
+            axes3.set_xlabel('Time step (dt)')
+            axes3.set_title(f"Composition Analysis with Leapfrog Flow, NA={NA}, kT={KT}")
         
+        axes3.set_ylim(0, 1)
+
         fig3.tight_layout()  # otherwise the right y-label is slightly clipped
         plt.savefig(f'{output_dir}/ Composition_and_Loss_Analysis.png')
 
         # 6. Save Trajectory
         # We need Ga percents for the PDB writer
-        ga_percents = p_a_all
-        as_percents = 1.0 - p_a_all
-        #downsample by factor of 10
-        ga_percents = ga_percents[::50]
-        as_percents = as_percents[::50]
-        write_pdb_trajectory(Path(f'{output_dir}/generated_samples.pdb'), coords, ga_percents, as_percents)
+        # ga_percents = p_a_all
+        # as_percents = 1.0 - p_a_all
+        # #downsample by factor of 10
+        # ga_percents = ga_percents[::50]
+        # as_percents = as_percents[::50]
+        # write_pdb_trajectory(Path(f'{output_dir}/generated_samples.pdb'), coords, ga_percents, as_percents)
 
         # 7. Save model
         if losses is not None:
             torch.save(flow.state_dict(), f'{output_dir}/trained_flow_model.pth')
 
         # 8. Save configuration
-        config = {
-            'PDB_PATH': str(PDB_PATH),
-            'BOX': BOX.tolist(),
-            'CUTS': CUTS,
-            'BATCH_SIZE': BATCH_SIZE,
-            'NA': NA,
-            'DIM': DIM,
-            'SIGMA': SIGMA,
-            'KT': KT,
-            'LR': LR,
-            'TRAIN_ITERS': TRAIN_ITERS,
-            'N_STEPS_FLOW': N_STEPS_FLOW,
-            'EPOCHS': EPOCHS,
-            'MU': MU.tolist(),
-            'E1': E1.tolist(),
-            'E2': E2.tolist()
-        }
-        with open(f'{output_dir}/config.txt', 'w') as f:
-            for key, value in config.items():
-                f.write(f"{key}: {value}\n")
+        # config = {
+        #     'PDB_PATH': str(PDB_PATH),
+        #     'BOX': BOX.tolist(),
+        #     'CUTS': CUTS,
+        #     'BATCH_SIZE': BATCH_SIZE,
+        #     'NA': NA,
+        #     'DIM': DIM,
+        #     'SIGMA': SIGMA,
+        #     'KT': KT,
+        #     'LR': LR,
+        #     'TRAIN_ITERS': TRAIN_ITERS,
+        #     'N_STEPS_FLOW': N_STEPS_FLOW,
+        #     'EPOCHS': EPOCHS,
+        #     'MU': MU.tolist(),
+        #     'E1': E1.tolist(),
+        #     'E2': E2.tolist()
+        # }
+        # with open(f'{output_dir}/config.txt', 'w') as f:
+        #     for key, value in config.items():
+        #         f.write(f"{key}: {value}\n")
 
-        print("Results saved to output directory:", output_dir)
-        p_A_overall = p_a_all.mean().item()
-        try:
-            K = p_A_overall / (1 - p_A_overall)
-        except ZeroDivisionError:
-            K = 10
+        # print("Results saved to output directory:", output_dir)
+        # p_A_overall = p_a_all.mean().item()
+        # try:
+        #     K = p_A_overall / (1 - p_A_overall)
+        # except ZeroDivisionError:
+        #     K = 10
 
-        del p_A_overall, p_a_all, per_atom_energy, flat_energy, flat_p_a
+        # del p_A_overall, p_a_all, per_atom_energy, flat_energy, flat_p_a
         torch.cuda.empty_cache()
 
-        return K, (t1 - t0)/num_samples
+        return None, (t1 - t0)/num_samples
     
     print("Starting training...")
     if runtype == 'RealNVP':
@@ -412,23 +431,29 @@ def main(runtype = 'RealNVP'):
     elif runtype == 'leapfrog':
         output_dir = f'Fig5/LeapFrog_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
-        def U(r, t):
-            return compute_energy_parameterized(assemble_neighbor_features(r, neighborlists), MU, E1, E2).sum(dim=1)
         
-        flow = LeapFrog(U, const_kT = KT)
+        def U(r, t):
+            return compute_energy_parameterized(assemble_neighbor_features(r, neighborlists), MU, E1, E2).sum(dim=1) + KT*(r*r).sum((-2,-1))/(2*SIGMA**2)
+        
+        flow = LeapFrog(U, const_kT = KT, dt = leapfrogdt)
         vals = []
         x0 = next(data_gen())
         x = copy.deepcopy(x0)
         logJ = 0.0
         
-        for epoch in range(50000):
+        if run_times == True:
+            t0 = time.perf_counter()
+        for epoch in range(3000):
             x_new, lJ, info = flow(x)
             logJ += lJ.detach()
             x = {k: v.detach().requires_grad_(True) for k, v in x_new.items()}
-            if (epoch+1) % 200 == 0:
-                print(f"Leapfrog training epoch {epoch+1}/50000")
+            if (epoch+1) % 10 == 0:
+                print(f"Leapfrog training epoch {epoch+1}/3000")
                 feat = feature_extractor(x)
-                vals.append(feat)
+                vals.append(feat.detach())
+        if run_times == True:
+            t1 = time.perf_counter()
+            return 0, (t1 - t0)
         compositions = vals
         print("Leapfrog training complete. Generating samples and analysis...")
         return graphing(compositions, output_dir, data_gen)
@@ -437,31 +462,59 @@ def main(runtype = 'RealNVP'):
     print("Training complete.")
 
 if __name__ == "__main__":
+    SIGMA = 5
     if True:
-        KT = 0.02569  #note k = 8.617333 *10^-5 eV/K, T = 298.15K, kT = 0.0257 eV but we are using arbitrary units so we can set kT = 1 for simplicity
-
+        leapfrogdt = 0.5
+        run_times = True
         #times plot
         #get times for NA = 8, 64, 216, 512
-        NAs = [64, 216, 512]
-        times_NVP = []
-        times_Glow = []
-        times_LeapFrog = []
-        for NA in NAs:
-            K_NVP, time_NVP = main(runtype='RealNVP')
-            K_Glow, time_Glow = main(runtype='Glow')
-            K_LeapFrog, time_LeapFrog = main(runtype='leapfrog')
+        NAs = [64, 216, 512] #512
+        KT = 1
 
-            times_NVP.append(time_NVP)
-            times_Glow.append(time_Glow)
-            times_LeapFrog.append(time_LeapFrog)
+        makedata = True
+
+        if makedata:
+            times_NVP = []
+            times_Glow = []
+            times_LeapFrog = []
+            for NA in NAs:
+                    
+                K_Glow, time_Glow = main(runtype='Glow')
+                K_LeapFrog, time_LeapFrog = main(runtype='leapfrog')
+                K_NVP, time_NVP = main(runtype='RealNVP')
+
+                times_NVP.append(time_NVP)
+                times_Glow.append(time_Glow)
+                times_LeapFrog.append(time_LeapFrog)
+        else: #load data from json
+            with open('Fig3/time_data.json', 'r') as f:
+                time_data = json.load(f)
+            times_NVP = time_data['times_NVP']
+            times_Glow = time_data['times_Glow']
+            times_LeapFrog = time_data['times_LeapFrog']
         
+        # raise NotImplementedError("This code is for generating and plotting times for different flow types. Please set 'makedata' to True to generate new data or False to load existing data from 'Fig3/time_data.json'.")
+
         # Plot the times
         fig, ax = plt.subplots(figsize=(6, 4))
         ax.plot(NAs, times_NVP, label='RealNVP', marker='o')
         ax.plot(NAs, times_Glow, label='Glow', marker='o')
         ax.plot(NAs, times_LeapFrog, label='LeapFrog', marker='o')
+        #log scale in y as it is so much slower for leapfrog
+        ax.set_yscale('log')
         ax.set_xlabel('Number of Atoms (NA)')
         ax.set_ylabel('Time per Sample (s)')
         ax.set_title('Time per Sample vs Number of Atoms')
         ax.legend()
         fig.savefig(f'Fig5/time_per_sample.png')
+
+        #save to a dict
+        time_data = {
+            'NAs': NAs,
+            'times_NVP': times_NVP,
+            'times_Glow': times_Glow,
+            'times_LeapFrog': times_LeapFrog
+        }
+        #save as json
+        with open('Fig5/time_data.json', 'w') as f:
+            json.dump(time_data, f, indent=4)

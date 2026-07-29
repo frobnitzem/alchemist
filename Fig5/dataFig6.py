@@ -40,13 +40,13 @@ def _compute_interactions(last_ga_frame, first_pairs, second_pairs):
 
 if __name__ == "__main__":
     CUTS = [2.5, 4.5]
-    test_count = 10000
-    KT = 0.02569
+    test_count = 1000
+    KT = 1
     DIM = 2
-    SIGMA = 10
+    SIGMA = 5
     scale = test_count // 5
     folder = 'Fig5'
-    run_type = 'RealNVP'
+    run_type = 'Glow'
     for nn_model in glob.glob(f'{folder}/{run_type}_*/trained_flow_model.pth'):
         print(f"Testing model: {nn_model}")
         filename = folder + '/' + nn_model.split('/')[1] + '/'
