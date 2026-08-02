@@ -280,7 +280,7 @@ def main(runtype = 'RealNVP'):
         # plt.savefig(f'{output_dir}/energy_analysis.png')
 
         # Plot 3: Loss and composition double plot
-        fig3, axes3 = plt.subplots(1, 1, figsize=(8, 5))
+        fig3, axes3 = plt.subplots(1, 1, figsize=(6,4))
         #average compositions over batches
         compositions = torch.stack(compositions, dim=0).detach().numpy() # (EPOCHS, D) -> (EPOCHS,)
         color = 'tab:red'
@@ -305,11 +305,12 @@ def main(runtype = 'RealNVP'):
             axes4.plot(boundary_losses, color='tab:purple', label='Boundary Loss')
             axes4.tick_params(axis='y', labelcolor=color)
             axes4.legend()
-            axes3.set_title(f"Loss and Composition Analysis with {runtype} Flow, NA={NA}, kT={KT}")
+            axes4.set_ylim(-100,500)
+            # axes3.set_title(f"Loss and Composition Analysis with {runtype} Flow, NA={NA}, kT={KT}")
         else:
             axes3.scatter((torch.arange(compositions.shape[0])+1)*10, compositions, color=color)
             axes3.set_xlabel('Time step (dt)')
-            axes3.set_title(f"Composition Analysis with {runtype} Flow, NA={NA}, kT={KT}")
+            # axes3.set_title(f"Composition Analysis with {runtype} Flow, NA={NA}, kT={KT}")
         
         axes3.set_ylim(0, 1)
 
@@ -367,7 +368,7 @@ def main(runtype = 'RealNVP'):
         }
         torch.save(results, f'{output_dir}/results.pt')
 
-        return K, (t1 - t0)/num_samples
+        return K, (t1 - t0)/num_samples, 0
     
     print("Starting training...")
     if runtype == 'RealNVP':
@@ -378,6 +379,7 @@ def main(runtype = 'RealNVP'):
         flow = RealNVP(DIM, NA, hidden_dims=HIDDEN_DIMS, n_layers=N_STEPS_FLOW)
         optimizer = optim.Adam(flow.parameters(), lr=LR)
 
+        train_start = time.perf_counter()
         vals, losses_train = train_and_summarize(
             model=flow,
             loss_fn=loss_fn,
@@ -388,9 +390,11 @@ def main(runtype = 'RealNVP'):
             feature_extractor=feature_extractor,
             inverse=False
         )
+        train_end = time.perf_counter()
         compositions = vals
         losses = losses_train
-        return graphing(compositions, output_dir, data_gen, losses)
+        K, sample_time, _ = graphing(compositions, output_dir, data_gen, losses)
+        return K, sample_time, (train_end - train_start)
     elif runtype == 'Glow':
         output_dir = f'Fig3/Glow_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -400,6 +404,7 @@ def main(runtype = 'RealNVP'):
         flow = MultiStep(glow, N_STEPS_FLOW)
         optimizer = optim.Adam(flow.parameters(), lr=LR)
 
+        train_start = time.perf_counter()
         vals, losses_train = train_and_summarize(
             model=flow,
             loss_fn=loss_fn,
@@ -410,9 +415,11 @@ def main(runtype = 'RealNVP'):
             feature_extractor=feature_extractor,
             inverse=False
         )
+        train_end = time.perf_counter()
         compositions = vals
         losses = losses_train
-        return graphing(compositions, output_dir, data_gen, losses)
+        K, sample_time, _ = graphing(compositions, output_dir, data_gen, losses)
+        return K, sample_time, (train_end - train_start)
     elif runtype == 'leapfrog':
         output_dir = f'Fig3/LeapFrog_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -436,10 +443,14 @@ def main(runtype = 'RealNVP'):
                 print(f"Leapfrog training epoch {epoch+1}/3000")
                 feat = feature_extractor(x)
                 vals.append(feat.detach())
+                
+                #for the first time, record time
+                if epoch == 9 and run_times == True:
+                    t2 = time.perf_counter()
         compositions = vals
         if run_times == True:
             t1 = time.perf_counter()
-            return 0, (t1 - t0)
+            return 0, (t2-t0), (t1 - t0)
         return graphing(compositions, output_dir, data_gen)
     else:
         assert False, f"Unknown runtype: {runtype}"
@@ -447,7 +458,7 @@ def main(runtype = 'RealNVP'):
 
 if __name__ == "__main__":
     SIGMA = 5
-    if False:
+    if True:
         Ks_NVP = []
         Ks_Glow = []
         Ks_LeapFrog = []
@@ -457,14 +468,15 @@ if __name__ == "__main__":
         NA = 216
         leapfrogdts = [0.5, 0.5, 0.5, 0.5, 0.5]
 
-        makedata = True
-
+        makedata = False
+        run_times = False
+        
         if makedata:
             for i, KT in enumerate(KTs):
                 leapfrogdt = leapfrogdts[i]
-                K_LeapFrog, time_LeapFrog = main(runtype='leapfrog')
-                K_Glow, time_Glow = main(runtype='Glow')
-                K_NVP, time_NVP = main(runtype='RealNVP')
+                K_LeapFrog, time_LeapFrog, _ = main(runtype='leapfrog')
+                K_Glow, time_Glow, _ = main(runtype='Glow')
+                K_NVP, time_NVP, _ = main(runtype='RealNVP')
                 
                 Ks_NVP.append(K_NVP)
                 Ks_Glow.append(K_Glow)
@@ -498,12 +510,12 @@ if __name__ == "__main__":
         fit_line_LeapFrog = np.polyval(coeffs_LeapFrog, one_kT.numpy())
 
         #draw fit lines for each method
-        ax.plot(one_kT.numpy(), fit_line_NVP, label='RealNVP Fit: ' + f'{coeffs_NVP[0]:.2f}x + {coeffs_NVP[1]:.2f}', color='b', linestyle='--')
-        ax.plot(one_kT.numpy(), fit_line_Glow, label='Glow Fit: ' + f'{coeffs_Glow[0]:.2f}x + {coeffs_Glow[1]:.2f}', color='g', linestyle='--')
-        ax.plot(one_kT.numpy(), fit_line_LeapFrog, label='LeapFrog Fit: ' + f'{coeffs_LeapFrog[0]:.2f}x + {coeffs_LeapFrog[1]:.2f}', color='r', linestyle='--')
+        # ax.plot(one_kT.numpy(), fit_line_NVP, label='RealNVP Fit: ' + f'{coeffs_NVP[0]:.2f}x + {coeffs_NVP[1]:.2f}', color='b', linestyle='--')
+        # ax.plot(one_kT.numpy(), fit_line_Glow, label='Glow Fit: ' + f'{coeffs_Glow[0]:.2f}x + {coeffs_Glow[1]:.2f}', color='g', linestyle='--')
+        # ax.plot(one_kT.numpy(), fit_line_LeapFrog, label='LeapFrog Fit: ' + f'{coeffs_LeapFrog[0]:.2f}x + {coeffs_LeapFrog[1]:.2f}', color='r', linestyle='--')
 
         #thoeretical results
-        lnK_theory = -(MU[1] - MU[0]) * one_kT/2
+        lnK_theory = -(MU[1] - MU[0]) * one_kT
         print("Theoretical lnK values:", lnK_theory.numpy())
         ax.plot(one_kT.numpy(), lnK_theory.numpy(), label='Theory', linestyle='-', color='k') 
 
@@ -518,6 +530,7 @@ if __name__ == "__main__":
         theory_handles = [h for h in handles if isinstance(h, plt.Line2D) and h.get_linestyle() == '-']
         ax.legend(scatter_handles + fit_handles + theory_handles, labels=labels)
 
+        fig.tight_layout()
         fig.savefig(f'Fig3/vant_hoff_plot.png')
         #save to a dict
         vant_hoff_data = {
@@ -533,7 +546,7 @@ if __name__ == "__main__":
             json.dump(vant_hoff_data, f, indent=4)
 
     #can only do this if other is False
-    if True:
+    if False:
         leapfrogdt = 0.5
         run_times = True
         #times plot
@@ -544,44 +557,60 @@ if __name__ == "__main__":
         makedata = True
 
         if makedata:
-            times_NVP = []
-            times_Glow = []
-            times_LeapFrog = []
+            samples_times_NVP = []
+            samples_times_Glow = []
+            samples_times_LeapFrog = []
+            train_times_NVP = []
+            train_times_Glow = []
+            train_times_LeapFrog = []
             for NA in NAs:
                     
-                K_Glow, time_Glow = main(runtype='Glow')
-                K_LeapFrog, time_LeapFrog = main(runtype='leapfrog')
-                K_NVP, time_NVP = main(runtype='RealNVP')
+                K_Glow, samples_time_Glow, train_time_Glow = main(runtype='Glow')
+                K_LeapFrog, samples_time_LeapFrog, train_time_LeapFrog = main(runtype='leapfrog')
+                K_NVP, samples_time_NVP, train_time_NVP = main(runtype='RealNVP')
 
-                times_NVP.append(time_NVP)
-                times_Glow.append(time_Glow)
-                times_LeapFrog.append(time_LeapFrog)
+                samples_times_NVP.append(samples_time_NVP)
+                samples_times_Glow.append(samples_time_Glow)
+                samples_times_LeapFrog.append(samples_time_LeapFrog)
+                train_times_NVP.append(train_time_NVP)
+                train_times_Glow.append(train_time_Glow)
+                train_times_LeapFrog.append(train_time_LeapFrog)
         else: #load data from json
             with open('Fig3/time_data.json', 'r') as f:
                 time_data = json.load(f)
-            times_NVP = time_data['times_NVP']
-            times_Glow = time_data['times_Glow']
-            times_LeapFrog = time_data['times_LeapFrog']
+            samples_times_NVP = time_data['samples_NVP']
+            samples_times_Glow = time_data['samples_Glow']
+            samples_times_LeapFrog = time_data['samples_LeapFrog']
+            train_times_NVP = time_data['train_NVP']
+            train_times_Glow = time_data['train_Glow']
+            train_times_LeapFrog = time_data['train_LeapFrog']
         
         # Plot the times
         fig, ax = plt.subplots(figsize=(6, 4))
-        ax.plot(NAs, times_NVP, label='RealNVP', marker='o')
-        ax.plot(NAs, times_Glow, label='Glow', marker='o')
-        ax.plot(NAs, times_LeapFrog, label='LeapFrog', marker='o')
+        ax.plot(NAs, samples_times_NVP, label='Sample RealNVP', marker='o')
+        ax.plot(NAs, samples_times_Glow, label='Sample Glow', marker='o')
+        ax.plot(NAs, samples_times_LeapFrog, label='Sample LeapFrog', marker='o')
+        ax.plot(NAs, train_times_NVP, label='Train RealNVP', marker='x')
+        ax.plot(NAs, train_times_Glow, label='Train Glow', marker='x')
+        ax.plot(NAs, train_times_LeapFrog, label='Train LeapFrog', marker='x')
         #log scale in y as it is so much slower for leapfrog
         ax.set_yscale('log')
-        ax.set_xlabel('Number of Atoms (NA)')
+        ax.set_xlabel(r'Number of Atoms ($N_A$)')
         ax.set_ylabel('Time per Sample (s)')
-        ax.set_title('Time per Sample vs Number of Atoms')
+        # ax.set_title('Time per Sample vs Number of Atoms')
         ax.legend()
+        fig.tight_layout()
         fig.savefig(f'Fig3/time_per_sample.png')
 
         #save to a dict
         time_data = {
             'NAs': NAs,
-            'times_NVP': times_NVP,
-            'times_Glow': times_Glow,
-            'times_LeapFrog': times_LeapFrog
+            'samples_NVP': samples_times_NVP,
+            'samples_Glow': samples_times_Glow,
+            'samples_LeapFrog': samples_times_LeapFrog,
+            'train_NVP': train_times_NVP,
+            'train_Glow': train_times_Glow,
+            'train_LeapFrog': train_times_LeapFrog
         }
         #save as json
         with open('Fig3/time_data.json', 'w') as f:

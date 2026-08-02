@@ -325,12 +325,12 @@ def main(runtype = 'RealNVP'):
             axes4.plot(boundary_losses, color='tab:purple', label='Boundary Loss')
             axes4.tick_params(axis='y', labelcolor=color)
             axes4.legend()
-            axes3.set_title(f"Loss and Composition Analysis with {runtype} Flow, NA={NA}, kT={KT}")
+            # axes3.set_title(f"Loss and Composition Analysis with {runtype} Flow, NA={NA}, kT={KT}")
             
         else:
             axes3.scatter((torch.arange(compositions.shape[0])+1)*10, compositions, color=color)
             axes3.set_xlabel('Time step (dt)')
-            axes3.set_title(f"Composition Analysis with {runtype} Flow, NA={NA}, kT={KT}")
+            # axes3.set_title(f"Composition Analysis with {runtype} Flow, NA={NA}, kT={KT}")
         
         axes3.set_ylim(0, 1)
         fig3.tight_layout()  # otherwise the right y-label is slightly clipped
@@ -363,22 +363,22 @@ def main(runtype = 'RealNVP'):
             overall_interactions[:, 3] /= 2592
             overall_interactions[:, 4] /= 2592
             overall_interactions[:, 5] /= 2592
-            plt.figure(figsize=(10, 6))
+            plt.figure(figsize=(6, 4))
             bin_range = torch.arange(0, 1.01, 0.01)
-            plt.hist(overall_interactions[:, 0], bins=bin_range, alpha=0.5, label='1st neighbor Ga-Ga')
-            plt.hist(overall_interactions[:, 1], bins=bin_range, alpha=0.5, label='1st neighbor Ga-As')
-            plt.hist(overall_interactions[:, 2], bins=bin_range, alpha=0.5, label='1st neighbor As-As')
+            plt.hist(overall_interactions[:, 0], bins=bin_range, alpha=0.5, label='1st neighbor A-A')
+            plt.hist(overall_interactions[:, 1], bins=bin_range, alpha=0.5, label='1st neighbor A-B')
+            plt.hist(overall_interactions[:, 2], bins=bin_range, alpha=0.5, label='1st neighbor B-B')
 
-            plt.hist(overall_interactions[:, 3], bins=bin_range, alpha=0.5, label='2nd neighbor Ga-Ga')
-            plt.hist(overall_interactions[:, 4], bins=bin_range, alpha=0.5, label='2nd neighbor Ga-As')
-            plt.hist(overall_interactions[:, 5], bins=bin_range, alpha=0.5, label='2nd neighbor As-As')
+            plt.hist(overall_interactions[:, 3], bins=bin_range, alpha=0.5, label='2nd neighbor A-A')
+            plt.hist(overall_interactions[:, 4], bins=bin_range, alpha=0.5, label='2nd neighbor A-B')
+            plt.hist(overall_interactions[:, 5], bins=bin_range, alpha=0.5, label='2nd neighbor B-B')
             plt.xlabel('Interaction Count')
             plt.ylabel('Frequency')
             plt.xlim(0, 1)
             plt.ylim(0, 3000//10)
             # plt.title(f'Histogram of Interactions for {nn_model.split("/")[-1].split(".")[0]} (Test Count: {test_count})')
             plt.legend()
-            plt.tight_layout()
+                
             plt.savefig(f'{output_dir}/interactions_histogram.png', dpi=150)
 
         # 6. Save Trajectory
@@ -543,21 +543,21 @@ if __name__ == "__main__":
         KTs = [0.25, 0.5, 1, 2, 4]
         LeapFrog_interactions = []
         for KT in KTs:
-            # K_NVP, time_NVP = main(runtype='RealNVP')
-            # K_Glow, time_Glow = main(runtype='Glow')
+            K_NVP, time_NVP = main(runtype='RealNVP')
+            K_Glow, time_Glow = main(runtype='Glow')
             overall_interactions, time_LeapFrog = main(runtype='leapfrog')
 
             LeapFrog_interactions.append(overall_interactions)
         
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(6, 4))
         #there are 6 interaction types, so we will plot the average of each type across all KTs
         average_interactions = torch.tensor(LeapFrog_interactions)
-        plt.plot(KTs, average_interactions[:, 0], label='1st neighbor Ga-Ga')
-        plt.plot(KTs, average_interactions[:, 1], label='1st neighbor Ga-As')
-        plt.plot(KTs, average_interactions[:, 2], label='1st neighbor As-As')
-        plt.plot(KTs, average_interactions[:, 3], label='2nd neighbor Ga-Ga')
-        plt.plot(KTs, average_interactions[:, 4], label='2nd neighbor Ga-As')
-        plt.plot(KTs, average_interactions[:, 5], label='2nd neighbor As-As')
+        plt.plot(KTs, average_interactions[:, 0], label='1st neighbor A-A')
+        plt.plot(KTs, average_interactions[:, 1], label='1st neighbor A-B')
+        plt.plot(KTs, average_interactions[:, 2], label='1st neighbor B-B')
+        plt.plot(KTs, average_interactions[:, 3], label='2nd neighbor A-A')
+        plt.plot(KTs, average_interactions[:, 4], label='2nd neighbor A-B')
+        plt.plot(KTs, average_interactions[:, 5], label='2nd neighbor B-B')
         plt.ylim(0, 1)
         plt.xlabel('kT')
         plt.ylabel('Average Interaction Count')

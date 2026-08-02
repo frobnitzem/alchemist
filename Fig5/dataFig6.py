@@ -46,7 +46,7 @@ if __name__ == "__main__":
     SIGMA = 5
     scale = test_count // 5
     folder = 'Fig5'
-    run_type = 'Glow'
+    run_type = 'RealNVP'
     for nn_model in glob.glob(f'{folder}/{run_type}_*/trained_flow_model.pth'):
         print(f"Testing model: {nn_model}")
         filename = folder + '/' + nn_model.split('/')[1] + '/'
@@ -154,19 +154,19 @@ if __name__ == "__main__":
 
         bin_width = 10
         #histogram of 1st neighbor interactions
-        plt.figure(figsize=(10, 6))
-        plt.hist(overall_interactions[:, 0].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor Ga-Ga')
-        plt.hist(overall_interactions[:, 1].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor Ga-As')
-        plt.hist(overall_interactions[:, 2].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor As-As')
+        plt.figure(figsize=(6, 4))
+        plt.hist(overall_interactions[:, 0].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor A-A')
+        plt.hist(overall_interactions[:, 1].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor A-B')
+        plt.hist(overall_interactions[:, 2].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor B-B')
 
-        plt.hist(overall_interactions[:, 3].numpy(), bins=bin_range, alpha=0.5, label='2nd neighbor Ga-Ga')
-        plt.hist(overall_interactions[:, 4].numpy(), bins=bin_range, alpha=0.5, label='2nd neighbor Ga-As')
-        plt.hist(overall_interactions[:, 5].numpy(), bins=bin_range, alpha=0.5, label='2nd neighbor As-As')
+        plt.hist(overall_interactions[:, 3].numpy(), bins=bin_range, alpha=0.5, label='2nd neighbor A-A')
+        plt.hist(overall_interactions[:, 4].numpy(), bins=bin_range, alpha=0.5, label='2nd neighbor A-B')
+        plt.hist(overall_interactions[:, 5].numpy(), bins=bin_range, alpha=0.5, label='2nd neighbor B-B')
         plt.xlabel('Interaction Count')
         plt.ylabel('Frequency')
         plt.xlim(0, 1)
         plt.ylim(0, scale)
-        plt.title(f'Histogram of Interactions for {nn_model.split("/")[-1].split(".")[0]} (Test Count: {test_count})')
+        # plt.title(f'Histogram of Interactions for {nn_model.split("/")[-1].split(".")[0]} (Test Count: {test_count})')
         plt.legend()
         plt.tight_layout()
         plt.savefig(f'{filename}interactions_histogram.png', dpi=150)

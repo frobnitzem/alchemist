@@ -45,7 +45,7 @@ if __name__ == "__main__":
     SIGMA = 1
     scale = test_count // 2
     folder = 'Fig7'
-    run_type = 'Glow'
+    run_type = 'RealNVP'
     NA = 216
     average_interactions = []
     KTs = [0.25, 0.5, 1, 2, 4]
@@ -152,19 +152,19 @@ if __name__ == "__main__":
 
 
         #histogram of  neighbor interactions
-        plt.figure(figsize=(10, 6))
-        plt.hist(overall_interactions[:, 0].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor Ga-Ga')
-        plt.hist(overall_interactions[:, 1].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor Ga-As')
-        plt.hist(overall_interactions[:, 2].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor As-As')
+        plt.figure(figsize=(6, 4))
+        plt.hist(overall_interactions[:, 0].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor A-A')
+        plt.hist(overall_interactions[:, 1].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor A-B')
+        plt.hist(overall_interactions[:, 2].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor B-B')
 
-        plt.hist(overall_interactions[:, 3].numpy(), bins=bin_range, alpha=0.5, label='2nd neighbor Ga-Ga')
-        plt.hist(overall_interactions[:, 4].numpy(), bins=bin_range, alpha=0.5, label='2nd neighbor Ga-As')
-        plt.hist(overall_interactions[:, 5].numpy(), bins=bin_range, alpha=0.5, label='2nd neighbor As-As')
+        plt.hist(overall_interactions[:, 3].numpy(), bins=bin_range, alpha=0.5, label='2nd neighbor A-A')
+        plt.hist(overall_interactions[:, 4].numpy(), bins=bin_range, alpha=0.5, label='2nd neighbor A-B')
+        plt.hist(overall_interactions[:, 5].numpy(), bins=bin_range, alpha=0.5, label='2nd neighbor B-B')
         plt.xlabel('Interaction Count')
         plt.ylabel('Frequency')
         plt.xlim(0, 1)
         plt.ylim(0, scale)
-        plt.title(f'Histogram of Interactions for {nn_model.split("/")[-1].split(".")[0]} (Test Count: {test_count})')
+        # plt.title(f'Histogram of Interactions for {nn_model.split("/")[-1].split(".")[0]} (Test Count: {test_count})')
         plt.legend()
         plt.tight_layout()
         plt.savefig(f'{filename}interactions_histogram.png', dpi=150)
@@ -206,19 +206,19 @@ if __name__ == "__main__":
         # print(overall_interactions.shape)
         average_interactions.append(overall_interactions.mean(dim=0).numpy())
     
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(6, 4))
     #there are 6 interaction types, so we will plot the average of each type across all KTs
     average_interactions = torch.tensor(average_interactions)
-    plt.plot(KTs, average_interactions[:, 0], label='1st neighbor Ga-Ga')
-    plt.plot(KTs, average_interactions[:, 1], label='1st neighbor Ga-As')
-    plt.plot(KTs, average_interactions[:, 2], label='1st neighbor As-As')
-    plt.plot(KTs, average_interactions[:, 3], label='2nd neighbor Ga-Ga')
-    plt.plot(KTs, average_interactions[:, 4], label='2nd neighbor Ga-As')
-    plt.plot(KTs, average_interactions[:, 5], label='2nd neighbor As-As')
+    plt.plot(KTs, average_interactions[:, 0], label='1st neighbor A-A')
+    plt.plot(KTs, average_interactions[:, 1], label='1st neighbor A-B')
+    plt.plot(KTs, average_interactions[:, 2], label='1st neighbor B-B')
+    plt.plot(KTs, average_interactions[:, 3], label='2nd neighbor A-A')
+    plt.plot(KTs, average_interactions[:, 4], label='2nd neighbor A-B')
+    plt.plot(KTs, average_interactions[:, 5], label='2nd neighbor B-B')
     plt.xlabel('kT')
     plt.ylim(0, 1)
     plt.ylabel('Average Interaction Count')
-    plt.title('Interactions vs Temperature')
+    # plt.title('Interactions vs Temperature')
     plt.legend()
     plt.tight_layout()
     plt.savefig(f'{folder}/{run_type}_interactions_vs_temperature.png', dpi=150)

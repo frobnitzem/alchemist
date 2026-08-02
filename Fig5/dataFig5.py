@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 
+from alchemist.summaryAnalysis import _build_neighbor_pairs, _compute_interactions
 from alchemist.flows import GlowBlock, MultiStep, Q, RealNVP, LeapFrog, fix_kT
 from alchemist.pdbs import read_pdb_coords, write_pdb_trajectory
 from alchemist.neighbors import compute_neighbor_masks, get_neighbor_indices, assemble_neighbor_features
@@ -46,6 +47,8 @@ def main(runtype = 'RealNVP'):
     
     # 3. Training Utilities
     normal = torch.distributions.normal.Normal(0, 1)
+    first_pairs = _build_neighbor_pairs(neighborlists[0])
+    second_pairs = _build_neighbor_pairs(neighborlists[1])
 
     def data_gen_NVP():
         r_coord = torch.tensor(coords, dtype=torch.float32)
@@ -215,7 +218,16 @@ def main(runtype = 'RealNVP'):
         B, N, D = x['r'].shape
         percents = torch.softmax(x['r'], dim=-1) # (B, N, D)
         percents_A = percents.mean(dim=(0,1))[0]
-        return percents_A
+
+        percents = torch.softmax(x['r'], dim=-1) # (B, N, D)
+        percents_A_forinteractions = percents[:,:,0]
+        #average over all batches after calculation interactions
+        interactions = torch.zeros((B, 6), dtype=torch.float32)
+        for i in range(B):
+            percent_A = percents_A_forinteractions[i]
+            interactions[i] = _compute_interactions(percent_A, first_pairs, second_pairs)
+
+        return [percents_A.detach(), interactions[:,1].mean().detach()]
 
     # Initialize with initial samples to get a baseline for the features
     # print("Starting initialization...")
@@ -235,6 +247,10 @@ def main(runtype = 'RealNVP'):
         num_samples = 20
         # per_atom_energy = torch.zeros(num_samples * BATCH_SIZE, NA)
         # p_a_all = torch.zeros(num_samples * BATCH_SIZE, NA)
+
+        #split compositions into comps and interactions
+        interactions = [comp[1]/864 for comp in compositions]
+        compositions = [comp[0] for comp in compositions]
         
         t0 = time.perf_counter()
         if losses is not None:
@@ -296,7 +312,7 @@ def main(runtype = 'RealNVP'):
         # plt.savefig(f'{output_dir}/energy_analysis.png')
 
         # Plot 3: Loss and composition double plot
-        fig3, axes3 = plt.subplots(1, 1, figsize=(8, 5))
+        fig3, axes3 = plt.subplots(1, 1, figsize=(6, 4))
         #average compositions over batches
         compositions = torch.stack(compositions, dim=0).detach().numpy() # (EPOCHS, D) -> (EPOCHS,)
         color = 'tab:red'
@@ -304,7 +320,8 @@ def main(runtype = 'RealNVP'):
         axes3.set_ylabel('Composition', color=color)
         
         if losses is not None:
-            axes3.scatter(range(compositions.shape[0]), compositions, color=color)
+            axes3.scatter(range(compositions.shape[0]), compositions, color=color, label='A Composition')
+            axes3.scatter(range(compositions.shape[0]), interactions, color='tab:blue', label='A-B Interactions')
 
             axes3.set_xlabel('Batch')
             losses = torch.tensor(losses).detach().numpy() # (EPOCHS, 2) -> (EPOCHS, 2)
@@ -321,12 +338,19 @@ def main(runtype = 'RealNVP'):
             axes4.plot(U_losses, color='tab:green', label=r'$\Delta U$/kT')
             axes4.plot(boundary_losses, color='tab:purple', label='Boundary Loss')
             axes4.tick_params(axis='y', labelcolor=color)
-            axes4.legend()
-            axes3.set_title(f"Loss and Composition Analysis with {runtype} Flow, NA={NA}, kT={KT}")
+            axes4.set_ylim(-100, 500)
+            lines_1, labels_1 = axes3.get_legend_handles_labels()
+            lines_2, labels_2 = axes4.get_legend_handles_labels()
+
+            # Add combined legend to the primary axis
+            axes3.legend(lines_1 + lines_2, labels_1 + labels_2)
+            # axes3.set_title(f"Loss and Composition Analysis with {runtype} Flow, NA={NA}, kT={KT}")
         else:
-            axes3.scatter((torch.arange(compositions.shape[0])+1)*10, compositions, color=color)
+            axes3.scatter((torch.arange(compositions.shape[0])+1)*10, compositions, color=color, label='A Composition')
+            axes3.scatter((torch.arange(compositions.shape[0])+1)*10, interactions, color='tab:blue', label='A-B Interactions')
             axes3.set_xlabel('Time step (dt)')
-            axes3.set_title(f"Composition Analysis with Leapfrog Flow, NA={NA}, kT={KT}")
+            # axes3.set_title(f"Composition Analysis with Leapfrog Flow, NA={NA}, kT={KT}")
+            axes3.legend()
         
         axes3.set_ylim(0, 1)
 
@@ -378,7 +402,7 @@ def main(runtype = 'RealNVP'):
         # del p_A_overall, p_a_all, per_atom_energy, flat_energy, flat_p_a
         torch.cuda.empty_cache()
 
-        return None, (t1 - t0)/num_samples
+        return None, (t1 - t0)/num_samples, _
     
     print("Starting training...")
     if runtype == 'RealNVP':
@@ -389,6 +413,7 @@ def main(runtype = 'RealNVP'):
         flow = RealNVP(DIM, NA, hidden_dims=HIDDEN_DIMS, n_layers=N_STEPS_FLOW)
         optimizer = optim.Adam(flow.parameters(), lr=LR)
 
+        train_start = time.perf_counter()
         vals, losses_train = train_and_summarize(
             model=flow,
             loss_fn=loss_fn,
@@ -399,9 +424,11 @@ def main(runtype = 'RealNVP'):
             feature_extractor=feature_extractor,
             inverse=False
         )
+        train_end = time.perf_counter()
         compositions = vals
         losses = losses_train
-        return graphing(compositions, output_dir, data_gen, losses)
+        K, sample_time, _ = graphing(compositions, output_dir, data_gen, losses)
+        return K, sample_time, (train_end - train_start)
     elif runtype == 'Glow':
         output_dir = f'Fig5/Glow_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -415,6 +442,7 @@ def main(runtype = 'RealNVP'):
         
         optimizer = optim.Adam(flow.parameters(), lr=LR)
 
+        train_start = time.perf_counter()
         vals, losses_train = train_and_summarize(
             model=flow,
             loss_fn=loss_fn,
@@ -425,9 +453,11 @@ def main(runtype = 'RealNVP'):
             feature_extractor=feature_extractor,
             inverse=False
         )
+        train_end = time.perf_counter()
         compositions = vals
         losses = losses_train
-        return graphing(compositions, output_dir, data_gen, losses)
+        K, sample_time, _ = graphing(compositions, output_dir, data_gen, losses)
+        return K, sample_time, (train_end - train_start)
     elif runtype == 'leapfrog':
         output_dir = f'Fig5/LeapFrog_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -450,13 +480,15 @@ def main(runtype = 'RealNVP'):
             if (epoch+1) % 10 == 0:
                 print(f"Leapfrog training epoch {epoch+1}/3000")
                 feat = feature_extractor(x)
-                vals.append(feat.detach())
+                vals.append(feat)
+                if epoch == 9:
+                    t2 = time.perf_counter()
         if run_times == True:
             t1 = time.perf_counter()
-            return 0, (t1 - t0)
         compositions = vals
         print("Leapfrog training complete. Generating samples and analysis...")
-        return graphing(compositions, output_dir, data_gen)
+        graphing(compositions, output_dir, data_gen)
+        return 0, t2-t0, (t1 - t0)
     else:
         assert False, f"Unknown runtype: {runtype}"
     print("Training complete.")
@@ -468,52 +500,68 @@ if __name__ == "__main__":
         run_times = True
         #times plot
         #get times for NA = 8, 64, 216, 512
-        NAs = [64, 216, 512] #512
-        KT = 1
+        NAs = [216]#[64, 216, 512] #512
+        KT = 0.5
 
         makedata = True
 
         if makedata:
-            times_NVP = []
-            times_Glow = []
-            times_LeapFrog = []
+            samples_times_NVP = []
+            samples_times_Glow = []
+            samples_times_LeapFrog = []
+            train_times_NVP = []
+            train_times_Glow = []
+            train_times_LeapFrog = []
             for NA in NAs:
-                    
-                K_Glow, time_Glow = main(runtype='Glow')
-                K_LeapFrog, time_LeapFrog = main(runtype='leapfrog')
-                K_NVP, time_NVP = main(runtype='RealNVP')
+                K_NVP, samples_time_NVP, train_time_NVP = main(runtype='RealNVP')
+                
+                raise NotImplementedError("stop")
+                K_Glow, samples_time_Glow, train_time_Glow = main(runtype='Glow')
+                K_LeapFrog, samples_time_LeapFrog, train_time_LeapFrog = main(runtype='leapfrog')
+                K_NVP, samples_time_NVP, train_time_NVP = main(runtype='RealNVP')
 
-                times_NVP.append(time_NVP)
-                times_Glow.append(time_Glow)
-                times_LeapFrog.append(time_LeapFrog)
+                samples_times_NVP.append(samples_time_NVP)
+                samples_times_Glow.append(samples_time_Glow)
+                samples_times_LeapFrog.append(samples_time_LeapFrog)
+                train_times_NVP.append(train_time_NVP)
+                train_times_Glow.append(train_time_Glow)
+                train_times_LeapFrog.append(train_time_LeapFrog)
         else: #load data from json
             with open('Fig3/time_data.json', 'r') as f:
                 time_data = json.load(f)
-            times_NVP = time_data['times_NVP']
-            times_Glow = time_data['times_Glow']
-            times_LeapFrog = time_data['times_LeapFrog']
+            samples_times_NVP = time_data['samples_NVP']
+            samples_times_Glow = time_data['samples_Glow']
+            samples_times_LeapFrog = time_data['samples_LeapFrog']
+            train_times_NVP = time_data['train_NVP']
+            train_times_Glow = time_data['train_Glow']
+            train_times_LeapFrog = time_data['train_LeapFrog']
         
-        # raise NotImplementedError("This code is for generating and plotting times for different flow types. Please set 'makedata' to True to generate new data or False to load existing data from 'Fig3/time_data.json'.")
-
         # Plot the times
         fig, ax = plt.subplots(figsize=(6, 4))
-        ax.plot(NAs, times_NVP, label='RealNVP', marker='o')
-        ax.plot(NAs, times_Glow, label='Glow', marker='o')
-        ax.plot(NAs, times_LeapFrog, label='LeapFrog', marker='o')
+        ax.plot(NAs, samples_times_NVP, label='Sample RealNVP', marker='o')
+        ax.plot(NAs, samples_times_Glow, label='Sample Glow', marker='o')
+        ax.plot(NAs, samples_times_LeapFrog, label='Sample LeapFrog', marker='o')
+        ax.plot(NAs, train_times_NVP, label='Train RealNVP', marker='x')
+        ax.plot(NAs, train_times_Glow, label='Train Glow', marker='x')
+        ax.plot(NAs, train_times_LeapFrog, label='Train LeapFrog', marker='x')
         #log scale in y as it is so much slower for leapfrog
         ax.set_yscale('log')
-        ax.set_xlabel('Number of Atoms (NA)')
+        ax.set_xlabel(r'Number of Atoms ($N_A$)')
         ax.set_ylabel('Time per Sample (s)')
-        ax.set_title('Time per Sample vs Number of Atoms')
+        # ax.set_title('Time per Sample vs Number of Atoms')
         ax.legend()
+        fig.tight_layout()
         fig.savefig(f'Fig5/time_per_sample.png')
 
         #save to a dict
         time_data = {
             'NAs': NAs,
-            'times_NVP': times_NVP,
-            'times_Glow': times_Glow,
-            'times_LeapFrog': times_LeapFrog
+            'samples_NVP': samples_times_NVP,
+            'samples_Glow': samples_times_Glow,
+            'samples_LeapFrog': samples_times_LeapFrog,
+            'train_NVP': train_times_NVP,
+            'train_Glow': train_times_Glow,
+            'train_LeapFrog': train_times_LeapFrog
         }
         #save as json
         with open('Fig5/time_data.json', 'w') as f:

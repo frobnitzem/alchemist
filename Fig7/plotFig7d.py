@@ -13,7 +13,7 @@ from alchemist.analysis import compute_neighbor_histograms, compute_energy_param
 
 
 if __name__ == "__main__":
-    plt.figure(figsize=(5*1.5, 3*1.5))
+    plt.figure(figsize=(6,4))
     #plot energies as a function of Ga composition
     ga_compositions = [1, 0, 0.5, 0.5]
     #strictly ga, as, and perfect alternating ga-as-ga-as
@@ -75,7 +75,7 @@ if __name__ == "__main__":
     fontsize = 15
     plt.xlabel('Ga Composition', fontsize=fontsize)
     plt.ylabel('Potential Energy', fontsize=fontsize)
-    plt.title('Phase Diagram', fontsize=fontsize)
+    # plt.title('Phase Diagram', fontsize=fontsize)
     plt.tight_layout()
     plt.legend()
     plt.savefig('Fig7/phase_diagram_energy.png')
