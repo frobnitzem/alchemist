@@ -65,7 +65,8 @@ def compute_energy_parameterized(
     assembled_features: torch.Tensor,
     mu: torch.Tensor,
     E1: torch.Tensor,
-    E2: torch.Tensor
+    E2: torch.Tensor,
+    sigma: Optional[torch.Tensor] = 1
 ) -> torch.Tensor:
     """
     Computes energy per atom using parameterized tensors.
@@ -81,6 +82,8 @@ def compute_energy_parameterized(
     """
     # Softmax to get probabilities (B, N, 17, D)
     p = torch.softmax(assembled_features, dim=-1)
+    r = assembled_features[..., 0, :]  # (B, N, D)
+    r2 = (r ** 2).sum(dim=-1)  # (B, N)
     
     # p_a: (B, N, D)
     p_a = p[..., 0, :]
@@ -91,10 +94,12 @@ def compute_energy_parameterized(
     
     # Energy = dot(p_a, mu) + sum(p_a^T @ E1 @ p_neighbor) + sum(p_a^T @ E2 @ p_neighbor)
     
+    term_bound =  r2 / (2 * sigma ** 2)  # (B, N)
+
     # term_mu: (B, N)
     # p_a is (B, N, D), mu is (D,)
     # Use einsum to ensure we contract over D regardless of B=1
-    term_mu = torch.einsum('bnd, d -> bn', p_a, mu)
+    term_mu = -torch.einsum('bnd, d -> bn', p_a, mu)
     
     # term_e1: (B, N, 4)
     # p_a @ E1 -> (B, N, D)
@@ -106,4 +111,4 @@ def compute_energy_parameterized(
     p_a_E2 = torch.matmul(p_a, E2)
     term_e2 = torch.sum(p_a_E2.unsqueeze(2) * p2, dim=-1)
     
-    return term_mu + term_e1.sum(dim=-1) + term_e2.sum(dim=-1)
+    return term_bound + term_mu + term_e1.sum(dim=-1) + term_e2.sum(dim=-1)

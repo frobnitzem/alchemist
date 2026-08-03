@@ -42,7 +42,8 @@ if __name__ == "__main__":
     CUTS = [2.5, 4.5]
     test_count = 1000
     DIM = 2
-    SIGMA = 1
+    N_STEPS_FLOW = 4
+    SIGMA = 5
     scale = test_count // 2
     folder = 'Fig7'
     run_type = 'RealNVP'
@@ -68,10 +69,10 @@ if __name__ == "__main__":
             return assemble_neighbor_features(r, neighborlists).reshape(r.shape[0], r.shape[1], -1)
         
         if run_type == 'RealNVP':
-            flow = RealNVP(DIM, NA, hidden_dims=networkdims, n_layers=4)
+            flow = RealNVP(DIM, NA, hidden_dims=networkdims, n_layers=N_STEPS_FLOW, dt = 1/N_STEPS_FLOW*2)
         elif run_type == 'Glow':
             glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=networkdims, data_size = 17, data_expansion=data_expansion)
-            flow = MultiStep(glow, 4)
+            flow = MultiStep(glow, N_STEPS_FLOW, dt = 1/N_STEPS_FLOW)
         weights = torch.load(nn_model)
         flow.load_state_dict(weights)
         flow.eval()
@@ -81,8 +82,6 @@ if __name__ == "__main__":
         last_Ga_composition = torch.empty((test_count,), dtype=torch.float32)
         sample_time_s = 0.0
         interaction_time_s = 0.0
-
-        normal = torch.distributions.normal.Normal(0, 1)
 
         if run_type == 'RealNVP':
             r_buf = torch.empty((1, NA, DIM))
@@ -151,7 +150,7 @@ if __name__ == "__main__":
         bin_range = torch.arange(0, 1.01, 0.01)
 
 
-        #histogram of  neighbor interactions
+        #histogram of neighbor interactions
         plt.figure(figsize=(6, 4))
         plt.hist(overall_interactions[:, 0].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor A-A')
         plt.hist(overall_interactions[:, 1].numpy(), bins=bin_range, alpha=0.5, label='1st neighbor A-B')

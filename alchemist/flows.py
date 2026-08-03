@@ -25,7 +25,7 @@ def dot_x(x,y):
 def fix_kT(p, kT):
     Ndof = p.size(-2)*p.size(-1)
     p2 = dot_x(p, p)
-    return p*torch.sqrt(Ndof / p2)[...,None,None]
+    return p*torch.sqrt(Ndof * kT / p2)[...,None,None]
 
 class LeapFrog(nn.Module):
     def __init__(self, en, dt=0.001, const_kT: Optional[float] = None):
