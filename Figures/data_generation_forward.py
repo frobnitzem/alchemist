@@ -63,115 +63,6 @@ def main(runtype = 'RealNVP'):
                 }
             yield x
 
-    def data_gen_ordered(vsample = False):
-        """Generate data in a specific order."""
-        idx = (torch.arange(1, 55).repeat_interleave(4)) % 2
-        base = torch.nn.functional.one_hot(idx, num_classes=2).float() #(N, 2)
-        base = base.unsqueeze(0)
-        while True:
-            r = base.repeat(BATCH_SIZE, 1, 1) #(B, N, 2)
-            if normal.sample((1,)).item() < 0:
-                r = 1-r
-            if vsample:
-                r, logq = sample_v(r)
-            else:
-                r = r * 10
-                logq = torch.zeros(BATCH_SIZE, dtype=torch.float32)
-            x = {
-                'r': r, 
-                'p': Q(normal.sample((BATCH_SIZE, NA, DIM))),
-                't': torch.tensor(0.0),
-                'loss': logq
-                }
-            yield x
-
-    def generate_ideal_gas_sample(
-        ratio= [0.75, 0.25],
-        shuffle=True,
-    ): 
-        ratio = torch.tensor(ratio, dtype=torch.float32)
-        assert torch.sum(ratio) == 1.0, "Ratio must sum to 1."
-        assert len(ratio) == DIM
-
-        ratio = torch.tensor(ratio, dtype=torch.float32)
-
-        counts = torch.round(ratio * NA).long()
-        diff = NA - counts.sum()
-        counts[-1] += diff   # adjust last class
-
-        base_labels = torch.cat([
-            torch.full((counts[i],), i, dtype=torch.long)
-            for i in range(DIM)
-        ], dim=0)
-
-        labels = base_labels.unsqueeze(0).expand(BATCH_SIZE, NA).clone()
-
-        while True:
-            if shuffle:
-                perm = torch.rand(BATCH_SIZE, NA).argsort(dim=1)
-                labels = torch.gather(labels, dim=1, index=perm)
-            onehot = F.one_hot(labels, num_classes=DIM).float()
-
-            # Sample v ~ q(v|x) satisfying argmax(v) = x.
-            v, logq = sample_v(onehot)
-
-            # q(a | v, x) = N(0, I), chosen here to be independent.
-            # Keep the original tensor because flow mutates/replaces state entries.
-            p_aux = torch.randn_like(v)
-
-            yield {
-                "labels": labels,
-                "r": v,
-                "p": p_aux,
-                "t": torch.tensor(0.0),
-                "loss": logq
-            }
-
-    def sample_v(x_onehot):
-        assert DIM == 2, "This helper is for binary categories only."
-
-        device = x_onehot.device
-        dtype = x_onehot.dtype
-
-        labels = x_onehot.argmax(dim=-1)  # (B, N)
-
-        # Sample u from iid standard logistic.
-        # v = logit(eps), u ~ Uniform(0, 1)
-        u = torch.rand(BATCH_SIZE, NA, DIM, device=device, dtype=dtype).clamp(1e-6, 1.0 - 1e-6)
-        v = torch.log(u) - torch.log1p(-u)
-
-        # if argmax is wrong, flip the two channels
-        wrong = v.argmax(dim=-1) != labels          # (B, N)
-        v_flipped = v.flip(dims=[-1])               # swap class 0 and 1
-        v = torch.where(wrong.unsqueeze(-1), v_flipped, v)
-
-        # log q(v|x)
-        # flip/order transform gives factor 2 per site
-        logq = (F.logsigmoid(v) + F.logsigmoid(-v)).sum(dim=[1, 2]) + NA * math.log(2.0)
-
-        return v, logq
-
-    def loss_ELBO(x0, x, logJ): #ELBO loss
-        """
-        Correct ideal-gas Argmax Flow loss.
-            ELBO = E_{v ~ q(v|x)} [log p(v) - log q(v|x)]
-        """
-
-        # Base density log p(z)
-        logpz = -0.5 * math.log(2.0 * math.pi * SIGMA ** 2) - 0.5 * (x["r"] / SIGMA) ** 2
-        logpz = logpz.sum(dim=[1, 2])
-
-        logpp = -0.5 * math.log(2.0 * math.pi * SIGMA ** 2) - 0.5 * (x['p'] / SIGMA) ** 2
-        logpp = logpp.sum(dim=[1, 2])
-        logq_p_aux = -0.5 * math.log(2.0 * math.pi * SIGMA ** 2) - 0.5 * (x0['p'] / SIGMA) ** 2
-        logq_p_aux = logq_p_aux.sum(dim=[1, 2]) 
-
-        loss = -(logpz + logJ - x['loss'] - logq_p_aux + logpp)
-
-        loss = -(logpz + logJ - x['loss'])
-
-        return loss.mean()
-
     def loss_KL(x0,x,logJ):
         
         assembled = assemble_neighbor_features(x['r'], neighborlists)
@@ -188,20 +79,6 @@ def main(runtype = 'RealNVP'):
         loss = 1 / KT * (energy - energy0) - logJ
         return loss.mean(), bound.mean()
 
-    def loss_MLE(x0, x, logJ):
-        """
-        Maximum Likelihood Estimation (MLE) loss for reverse flow.
-        """
-        # Base density log p(z)
-        logpz = -0.5 * math.log(2.0 * math.pi * SIGMA ** 2) - 0.5 * (x["r"] / SIGMA) ** 2
-        logpz = logpz.sum(dim=[1, 2])
-
-        logpp = -0.5 * math.log(2.0 * math.pi * SIGMA ** 2) - 0.5 * (x['p'] / SIGMA) ** 2
-        logpp = logpp.sum(dim=[1, 2])
-        
-        loss = -(logpz + logJ + logpp)
-
-        return loss.mean()
 
     def feature_extractor(x):
         B, N, D = x['r'].shape
@@ -219,20 +96,6 @@ def main(runtype = 'RealNVP'):
         #     interactions[i] = _compute_interactions(percent_A, first_pairs, second_pairs)
 
         # return [percents_A.detach(), interactions[:,1].mean().detach()]
-
-    # Initialize with initial samples to get a baseline for the features
-    # print("Starting initialization...")
-    # means, vars, losses_init = train_and_summarize(
-    #     model=flow,
-    #     loss_fn=loss_MLE,
-    #     data_generator=data_gen_ordered,
-    #     optimizer=optimizer,
-    #     epochs=EPOCHS,
-    #     batches_per_epoch=TRAIN_ITERS - 1,
-    #     feature_extractor=feature_extractor,
-    #     inverse=True
-    # )
-    # print("Initialization complete.")
 
     def graphing(compositions, output_dir,data_gen, losses = None):
         num_samples = 20
@@ -447,7 +310,7 @@ def main(runtype = 'RealNVP'):
     
     print("Starting training...")
     if runtype == 'RealNVP':
-        output_dir = f'Fig3/RealNVP_NA{NA}_KT{KT}'
+        output_dir = f'Figures/RealNVP_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         loss_fn = loss_KL
         data_gen = data_gen_NVP
@@ -471,11 +334,11 @@ def main(runtype = 'RealNVP'):
         K, sample_time, _ = graphing(compositions, output_dir, data_gen, losses)
         return K, sample_time, (train_end - train_start)
     elif runtype == 'Glow':
-        output_dir = f'Fig3/Glow_NA{NA}_KT{KT}'
+        output_dir = f'Figures/Glow_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         loss_fn = loss_KL
         data_gen = data_gen
-        glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=HIDDEN_DIMS, dt = 1/N_STEPS_FLOW)
+        glow = GlowBlock(dim=DIM, hidden_dims=HIDDEN_DIMS, dt = 1/N_STEPS_FLOW)
         #if interactions
         # def data_expansion(r):
         #     return assemble_neighbor_features(r, neighborlists).reshape(r.shape[0], r.shape[1], -1)
@@ -501,7 +364,7 @@ def main(runtype = 'RealNVP'):
         K, sample_time, _ = graphing(compositions, output_dir, data_gen, losses)
         return K, sample_time, (train_end - train_start)
     elif runtype == 'leapfrog':
-        output_dir = f'Fig3/LeapFrog_NA{NA}_KT{KT}'
+        output_dir = f'Figures/LeapFrog_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         def U(r, t):
             return compute_energy_parameterized(assemble_neighbor_features(r, neighborlists), MU, E1, E2).sum(1)
@@ -512,8 +375,7 @@ def main(runtype = 'RealNVP'):
         x = copy.deepcopy(x0)
         logJ = 0.0
         
-        if run_times == True:
-            t0 = time.perf_counter()
+        t0 = time.perf_counter()
         for epoch in range(3000):
             x_new, lJ, info = flow(x)
             logJ += lJ.detach()
@@ -536,25 +398,33 @@ def main(runtype = 'RealNVP'):
 
 if __name__ == "__main__":
     SIGMA = 5
-    if True:
+    leapfrogdt = 0.5
+    do_times_plot = True
+    times_config = {
+        'NAs': [64, 216, 512],
+        'kT': 1.0,
+        'makedata': True
+    }
+    do_temperatures_plot = True
+    temperatures_config = {
+        'NA': 216,
+        'kTs': [0.25, 0.5, 1.0, 2.0, 4.0],
+        'makedata': True
+    }
+
+    if do_temperatures_plot:
+        kTs = temperatures_config['kTs']
+        NA = temperatures_config['NA']
+        makedata = temperatures_config['makedata']
         Ks_NVP = []
         Ks_Glow = []
         Ks_LeapFrog = []
-
-        #has units kT
-        KTs = [0.25, 0.5, 1.0, 2.0, 4.0] #scale should be 1/kT from 0 to 4
-        NA = 216
-        leapfrogdts = [0.5, 0.5, 0.5, 0.5, 0.5]
-
-        makedata = False
-        run_times = False
         
         if makedata:
-            for i, KT in enumerate(KTs):
-                leapfrogdt = leapfrogdts[i]
-                K_LeapFrog, time_LeapFrog, _ = main(runtype='leapfrog')
-                K_Glow, time_Glow, _ = main(runtype='Glow')
-                K_NVP, time_NVP, _ = main(runtype='RealNVP')
+            for i, KT in enumerate(kTs):
+                K_LeapFrog, samples_time_LeapFrog, train_time_LeapFrog = main(runtype='leapfrog')
+                K_Glow, samples_time_Glow, train_time_Glow = main(runtype='Glow')
+                K_NVP, samples_time_NVP, train_time_NVP = main(runtype='RealNVP')
                 
                 Ks_NVP.append(K_NVP)
                 Ks_Glow.append(K_Glow)
@@ -565,7 +435,7 @@ if __name__ == "__main__":
             lnK_Glow = torch.log(torch.tensor(Ks_Glow, dtype=torch.float32))
             lnK_LeapFrog = torch.log(torch.tensor(Ks_LeapFrog, dtype=torch.float32))
         else: #load data from json
-            with open('Fig3/vant_hoff_data.json', 'r') as f:
+            with open('Figures/temperatures_data.json', 'r') as f:
                 vant_hoff_data = json.load(f)
             lnK_NVP = torch.tensor(vant_hoff_data['lnK_NVP'], dtype=torch.float32)
             lnK_Glow = torch.tensor(vant_hoff_data['lnK_Glow'], dtype=torch.float32)
@@ -573,7 +443,7 @@ if __name__ == "__main__":
         # raise SystemExit("Finished running all KTs, exiting before plotting.")
 
         fig, ax = plt.subplots(figsize=(6, 4))
-        one_kT = 1 / torch.tensor(KTs, dtype=torch.float32)
+        one_kT = 1 / torch.tensor(kTs, dtype=torch.float32)
         
         ax.scatter(one_kT.numpy(), lnK_NVP.numpy(), label='RealNVP', color='b')
         ax.scatter(one_kT.numpy(), lnK_Glow.numpy(), label='Glow', color='g')
@@ -609,7 +479,7 @@ if __name__ == "__main__":
         ax.legend(scatter_handles + fit_handles + theory_handles, labels=labels)
 
         fig.tight_layout()
-        fig.savefig(f'Fig3/vant_hoff_plot.png')
+        fig.savefig(f'Figures/temperatures/vant_hoff_plot.png')
         #save to a dict
         vant_hoff_data = {
             '1/kT': one_kT.tolist(),
@@ -620,19 +490,13 @@ if __name__ == "__main__":
         }
         #save as json
         import json
-        with open('Fig3/vant_hoff_data.json', 'w') as f:
+        with open('Figures/temperatures/vant_hoff_data.json', 'w') as f:
             json.dump(vant_hoff_data, f, indent=4)
 
-    #can only do this if other is False
-    if False:
-        leapfrogdt = 0.5
-        run_times = True
-        #times plot
-        #get times for NA = 8, 64, 216, 512
-        NAs = [64, 216, 512] #512
-        KT = 1
-
-        makedata = True
+    if do_times_plot:
+        NAs = times_config['NAs']
+        KT = times_config['kT']
+        makedata = times_config['makedata']
 
         if makedata:
             samples_times_NVP = []
@@ -654,7 +518,7 @@ if __name__ == "__main__":
                 train_times_Glow.append(train_time_Glow)
                 train_times_LeapFrog.append(train_time_LeapFrog)
         else: #load data from json
-            with open('Fig3/time_data.json', 'r') as f:
+            with open('Figures/times/time_data.json', 'r') as f:
                 time_data = json.load(f)
             samples_times_NVP = time_data['samples_NVP']
             samples_times_Glow = time_data['samples_Glow']
@@ -678,7 +542,7 @@ if __name__ == "__main__":
         # ax.set_title('Time per Sample vs Number of Atoms')
         ax.legend()
         fig.tight_layout()
-        fig.savefig(f'Fig3/time_per_sample.png')
+        fig.savefig(f'Figures/times/time_per_sample.png')
 
         #save to a dict
         time_data = {
@@ -691,5 +555,5 @@ if __name__ == "__main__":
             'train_LeapFrog': train_times_LeapFrog
         }
         #save as json
-        with open('Fig3/time_data.json', 'w') as f:
+        with open('Figures/times/time_data.json', 'w') as f:
             json.dump(time_data, f, indent=4)
