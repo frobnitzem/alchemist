@@ -66,10 +66,10 @@ def main(runtype = 'RealNVP'):
     def loss_KL(x0,x,logJ):
         
         assembled = assemble_neighbor_features(x['r'], neighborlists)
-        energy = compute_energy_parameterized(assembled, MU, E1, E2).sum(1)
+        energy = compute_energy_parameterized(assembled, MU, E1, E2, sigma=SIGMA).sum(1)
         
         assembled0 = assemble_neighbor_features(x0['r'], neighborlists)
-        energy0 = compute_energy_parameterized(assembled0, MU, E1, E2).sum(1)
+        energy0 = compute_energy_parameterized(assembled0, MU, E1, E2, sigma=SIGMA).sum(1)
 
         if runtype == 'Glow':
             energy += 0.5 * x["p"].square().sum(dim=(1, 2))
@@ -77,7 +77,7 @@ def main(runtype = 'RealNVP'):
 
 
         loss = 1 / KT * (energy - energy0) - logJ
-        return loss.mean(), bound.mean()
+        return loss.mean()
 
 
     def feature_extractor(x):
@@ -367,7 +367,7 @@ def main(runtype = 'RealNVP'):
         output_dir = f'Figures/LeapFrog_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         def U(r, t):
-            return compute_energy_parameterized(assemble_neighbor_features(r, neighborlists), MU, E1, E2).sum(1)
+            return compute_energy_parameterized(assemble_neighbor_features(r, neighborlists), MU, E1, E2, sigma = SIGMA).sum(1)
         
         flow = LeapFrog(U, const_kT = KT, dt = leapfrogdt)
         vals = []

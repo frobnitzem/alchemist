@@ -142,6 +142,8 @@ class GlowBlock(nn.Module):
 
     def forward(self, x, inverse=False, info={}):
         if inverse:
+            x['t'] = x['t'] - self.dt
+
             s, t = self.st2(self.data_expansion(x['r']), x['t'])
             x['p'] = (x['p'] - t)*torch.exp(-s)
 
@@ -150,7 +152,6 @@ class GlowBlock(nn.Module):
             s, t = self.st1(self.data_expansion(x['p']), x['t'])
             x['r'] = (x['r'] - t)*torch.exp(-s)
 
-            x['t'] = x['t'] - self.dt
             lJ += -s.sum(dim=(1,2))
         else:
             s, t = self.st1(self.data_expansion(x['p']), x['t'])
@@ -332,6 +333,9 @@ class RealNVP(nn.Module):
         logJ = torch.zeros(r_chem.shape[0], device=r_chem.device)
         
         for i in range(self.n_layers):
+            if inverse:
+                i = i + 1
+                x['t'] = x['t'] - self.dt
             # Alternating mask
             if i % 2 == 0:
                 r1 = r[:, :self.split, :]
@@ -357,7 +361,6 @@ class RealNVP(nn.Module):
             if inverse:
                 r2 = (r2 - t) * torch.exp(-s)
                 logJ += (-s).sum(dim=-1)
-                x['t'] = x['t'] - self.dt
             else:
                 r2 = r2 * torch.exp(s) + t
                 logJ += s.sum(dim=-1)
@@ -372,6 +375,8 @@ class RealNVP(nn.Module):
                 r = torch.cat([r1, r2], dim=-2)
             else:
                 r = torch.cat([r2, r1], dim=-2)
+                
+            r_chem = r[:,:,:-3]
 
-        x['r'] = r[:, :, :-3]  # Only keep chemical identities
+        x['r'] = r_chem  # Only keep chemical identities
         return x, logJ, info

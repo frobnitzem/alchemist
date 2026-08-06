@@ -66,7 +66,8 @@ def compute_energy_parameterized(
     mu: torch.Tensor,
     E1: torch.Tensor,
     E2: torch.Tensor,
-    sigma: Optional[torch.Tensor] = 1
+    sigma: Optional[torch.Tensor] = 1,
+    do_boundary: Optional[bool] = True
 ) -> torch.Tensor:
     """
     Computes energy per atom using parameterized tensors.
@@ -99,7 +100,7 @@ def compute_energy_parameterized(
     # term_mu: (B, N)
     # p_a is (B, N, D), mu is (D,)
     # Use einsum to ensure we contract over D regardless of B=1
-    term_mu = -torch.einsum('bnd, d -> bn', p_a, mu)
+    term_mu = torch.einsum('bnd, d -> bn', p_a, mu)
     
     # term_e1: (B, N, 4)
     # p_a @ E1 -> (B, N, D)
@@ -111,4 +112,7 @@ def compute_energy_parameterized(
     p_a_E2 = torch.matmul(p_a, E2)
     term_e2 = torch.sum(p_a_E2.unsqueeze(2) * p2, dim=-1)
     
-    return term_bound + term_mu + term_e1.sum(dim=-1) + term_e2.sum(dim=-1)
+    if do_boundary:
+        return term_bound + term_mu + term_e1.sum(dim=-1) + term_e2.sum(dim=-1)
+    else:
+        return term_mu + term_e1.sum(dim=-1) + term_e2.sum(dim=-1)

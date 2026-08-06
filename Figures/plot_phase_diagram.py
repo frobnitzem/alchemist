@@ -44,10 +44,10 @@ if __name__ == "__main__":
         r = torch.cat([r, 1 - r], dim=-1) # (1, N, 2)
         r = r * 10
         assembled = assemble_neighbor_features(r, neighborlists)
-        ga_energies.append(compute_energy_parameterized(assembled, MU, E1, E2).sum().item())
+        ga_energies.append(compute_energy_parameterized(assembled, MU, E1, E2, do_boundary=False).sum().item())
         
     for j in ['Glow','LeapFrog','RealNVP']:
-        file = f'Fig7/{j}_interactions_vs_temperature.json'
+        file = f'Figures/{j}_interactions_vs_temperature.json'
         data = json.load(open(file, 'r'))
         interactions = data['interactions']
 
@@ -78,4 +78,4 @@ if __name__ == "__main__":
     # plt.title('Phase Diagram', fontsize=fontsize)
     plt.tight_layout()
     plt.legend()
-    plt.savefig('Fig7/phase_diagram_energy.png')
+    plt.savefig('Figures/phase_diagram_energy.png')

@@ -45,7 +45,7 @@ if __name__ == "__main__":
     N_STEPS_FLOW = 4
     SIGMA = 5
     scale = test_count // 2
-    folder = 'Fig7'
+    folder = 'Figures'
     run_type = 'RealNVP'
     NA = 216
     average_interactions = []
@@ -69,10 +69,10 @@ if __name__ == "__main__":
             return assemble_neighbor_features(r, neighborlists).reshape(r.shape[0], r.shape[1], -1)
         
         if run_type == 'RealNVP':
-            flow = RealNVP(DIM, NA, hidden_dims=networkdims, n_layers=N_STEPS_FLOW, dt = 1/N_STEPS_FLOW*2)
+            flow = RealNVP(DIM, NA, hidden_dims=networkdims, n_layers=N_STEPS_FLOW, dt = 1/N_STEPS_FLOW)
         elif run_type == 'Glow':
-            glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=networkdims, data_size = 17, data_expansion=data_expansion)
-            flow = MultiStep(glow, N_STEPS_FLOW, dt = 1/N_STEPS_FLOW)
+            glow = GlowBlock(dim=DIM, dt = 1/N_STEPS_FLOW, hidden_dims=networkdims, data_size = 17, data_expansion=data_expansion)
+            flow = MultiStep(glow, N_STEPS_FLOW)
         weights = torch.load(nn_model)
         flow.load_state_dict(weights)
         flow.eval()
@@ -227,5 +227,5 @@ if __name__ == "__main__":
         'KTs': KTs,
         'interactions': average_interactions.numpy().tolist(),
     }
-    with open(f'Fig7/{run_type}_interactions_vs_temperature.json', 'w') as f:
+    with open(f'{folder}/{run_type}_interactions_vs_temperature.json', 'w') as f:
         json.dump(data, f, indent=4)
