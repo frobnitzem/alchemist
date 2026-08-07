@@ -19,17 +19,10 @@ DIM = 2
 LR = 1e-3
 TRAIN_ITERS = 11
 N_STEPS_FLOW = 4
-EPOCHS = 25
-HIDDEN_DIMS = [8,8,8]
+EPOCHS = 150
+HIDDEN_DIMS = [32,16,16,16]
 
-# Energy Parameters
-MU = torch.tensor([2,3], dtype=torch.float32)
-E1 = torch.tensor([[0,0],[0,0]], dtype=torch.float32)
-E2 = torch.tensor([[0,0],[0,0]], dtype=torch.float32)
-# E1 = torch.tensor([[-0.3,-0.5],[-0.5,-0.1]], dtype=torch.float32)
-# E2 = torch.tensor([[-0.05,-0],[-0,-0.05]], dtype=torch.float32)
-
-def main(runtype = 'RealNVP'):
+def main(runtype = 'RealNVP', KT = 1.0, NA = 216):
     PDB_PATH = Path(f'examples/GaAs/GaAs{NA}.pdb')
     num_repeats = round((NA / 8)**(1/3), 0)  # Calculate the number of repeats needed to achieve NA atoms
     BOX = torch.full((3,), 5.75 * num_repeats)
@@ -77,40 +70,42 @@ def main(runtype = 'RealNVP'):
 
 
         loss = 1 / KT * (energy - energy0) - logJ
-        return loss.mean()
+        return loss.mean(), x["r"].new_zeros(())
 
 
     def feature_extractor(x):
         B, N, D = x['r'].shape
         percents = torch.softmax(x['r'], dim=-1) # (B, N, D)
         percents_A = percents.mean(dim=(0,1))[0]
-        return percents_A
 
-        #if interactions
-        # percents = torch.softmax(x['r'], dim=-1) # (B, N, D)
-        # percents_A_forinteractions = percents[:,:,0]
-        # #average over all batches after calculation interactions
-        # interactions = torch.zeros((B, 6), dtype=torch.float32)
-        # for i in range(B):
-        #     percent_A = percents_A_forinteractions[i]
-        #     interactions[i] = _compute_interactions(percent_A, first_pairs, second_pairs)
-
-        # return [percents_A.detach(), interactions[:,1].mean().detach()]
-
+        if do_interactions:
+            percents = torch.softmax(x['r'], dim=-1) # (B, N, D)
+            percents_A_forinteractions = percents[:,:,0]
+            #average over all batches after calculation interactions
+            interactions = torch.zeros((B, 6), dtype=torch.float32)
+            for i in range(B):
+                percent_A = percents_A_forinteractions[i]
+                interactions[i] = _compute_interactions(percent_A, first_pairs, second_pairs)
+            if runtype == 'leapfrog':
+                return [percents_A.detach().cpu(), interactions[:,1].mean().detach().cpu()], interactions.detach().cpu()
+            else:
+                return [percents_A.detach().cpu(), interactions[:,1].mean().detach().cpu()]
+        else:
+            return percents_A.detach().cpu()
+    
     def graphing(compositions, output_dir,data_gen, losses = None):
         num_samples = 20
         # per_atom_energy = torch.zeros(num_samples * BATCH_SIZE, NA)
         # p_a_all = torch.zeros(num_samples * BATCH_SIZE, NA)
 
-        #if interactions
-        #split compositions into comps and interactions
-        # interactions = [comp[1]/864 for comp in compositions]
-        # compositions = [comp[0] for comp in compositions]
+        if do_interactions:
+            interactions = [comp[1] for comp in compositions]
+            compositions = [comp[0] for comp in compositions]
         
         t0 = time.perf_counter()
         if losses is not None:
             flow.eval()
-            with torch.no_grad():
+            with torch.inference_mode():
                 p_a_all = torch.empty((num_samples * BATCH_SIZE, NA), dtype=torch.float32)
                 for i in range(num_samples):
                     x = data_gen().__next__()
@@ -169,11 +164,12 @@ def main(runtype = 'RealNVP'):
         axes3.set_ylabel('Composition', color=color)
 
         if losses is not None:
-            axes3.scatter(range(compositions.shape[0]), compositions, color=color)
+            axes3.scatter(range(compositions.shape[0]), compositions, color=color, label = 'A Composition')
             axes3.set_xlabel('Batch')
-            #if interactions
-            # axes3.scatter(range(compositions.shape[0]), compositions, color=color, label='A Composition')
-            # axes3.scatter(range(compositions.shape[0]), interactions, color='tab:blue', label='A-B Interactions')
+            if do_interactions:
+                interactions = torch.stack(interactions, dim=0).detach().numpy() # (EPOCHS, 6) -> (EPOCHS, 6)
+                interactions = interactions/(NA*4)
+                axes3.scatter(range(compositions.shape[0]), interactions, color='tab:blue', label='A-B Interactions')
 
             losses = torch.tensor(losses).detach().numpy() # (EPOCHS, 2) -> (EPOCHS, 2)
             all_losses = losses[:, 0]
@@ -189,25 +185,29 @@ def main(runtype = 'RealNVP'):
             axes4.plot(U_losses, color='tab:green', label=r"$\Delta U$/kT")
             axes4.plot(boundary_losses, color='tab:purple', label='Boundary Loss')
             axes4.tick_params(axis='y', labelcolor=color)
-            axes4.legend()
-            axes4.set_ylim(-100,500)
-            #if interactions
-            # lines_1, labels_1 = axes3.get_legend_handles_labels()
-            # lines_2, labels_2 = axes4.get_legend_handles_labels()
+            # axes4.set_ylim(-100,500)
+            if do_interactions:
+                lines_1, labels_1 = axes3.get_legend_handles_labels()
+                lines_2, labels_2 = axes4.get_legend_handles_labels()
 
-            # # Add combined legend to the primary axis
-            # axes3.legend(lines_1 + lines_2, labels_1 + labels_2)
+                # Add combined legend to the primary axis
+                axes3.legend(lines_1 + lines_2, labels_1 + labels_2)
+            else:
+                axes4.legend()
         else:
-            axes3.scatter((torch.arange(compositions.shape[0])+1)*10, compositions, color=color)
+            axes3.scatter((torch.arange(compositions.shape[0])+1)*10, compositions, color=color, label = 'A Composition')
             axes3.set_xlabel('Time step (dt)')
-            #if interactions
-            # axes3.scatter((torch.arange(compositions.shape[0])+1)*10, compositions, color=color, label='A Composition')
-            # axes3.scatter((torch.arange(compositions.shape[0])+1)*10, interactions, color='tab:blue', label='A-B Interactions')
-        
+            if do_interactions:
+                interactions = torch.stack(interactions, dim=0).detach().numpy() # (EPOCHS, 6) -> (EPOCHS, 6)
+                interactions = interactions/(NA*4)
+                # print(interactions)
+                axes3.scatter((torch.arange(compositions.shape[0])+1)*10, interactions, color='tab:blue', label='A-B Interactions')
+
         axes3.set_ylim(0, 1)
 
         fig3.tight_layout()  # otherwise the right y-label is slightly clipped
         plt.savefig(f'{output_dir}/ Composition_and_Loss_Analysis.png')
+        plt.close()
 
         # #for leapfrog, plot interactions over steps
         # if losses is None:
@@ -312,16 +312,14 @@ def main(runtype = 'RealNVP'):
     if runtype == 'RealNVP':
         output_dir = f'Figures/RealNVP_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
-        loss_fn = loss_KL
-        data_gen = data_gen_NVP
-        flow = RealNVP(DIM, NA, hidden_dims=HIDDEN_DIMS, n_layers=N_STEPS_FLOW, dt = 1/N_STEPS_FLOW*2)
+        flow = RealNVP(DIM, NA, hidden_dims=HIDDEN_DIMS, n_layers=N_STEPS_FLOW, dt = 1/N_STEPS_FLOW)
         optimizer = optim.Adam(flow.parameters(), lr=LR)
 
         train_start = time.perf_counter()
         vals, losses_train = train_and_summarize(
             model=flow,
-            loss_fn=loss_fn,
-            data_generator=data_gen,
+            loss_fn=loss_KL,
+            data_generator=data_gen_NVP,
             optimizer=optimizer,
             epochs=EPOCHS,
             batches_per_epoch=TRAIN_ITERS - 1,
@@ -329,28 +327,28 @@ def main(runtype = 'RealNVP'):
             inverse=False
         )
         train_end = time.perf_counter()
-        compositions = vals
         losses = losses_train
-        K, sample_time, _ = graphing(compositions, output_dir, data_gen, losses)
+        K, sample_time, _ = graphing(vals, output_dir, data_gen_NVP, losses)
         return K, sample_time, (train_end - train_start)
     elif runtype == 'Glow':
         output_dir = f'Figures/Glow_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
-        loss_fn = loss_KL
-        data_gen = data_gen
-        glow = GlowBlock(dim=DIM, hidden_dims=HIDDEN_DIMS, dt = 1/N_STEPS_FLOW)
-        #if interactions
-        # def data_expansion(r):
-        #     return assemble_neighbor_features(r, neighborlists).reshape(r.shape[0], r.shape[1], -1)
+
+        if do_interactions:
+            def data_expansion(r):
+                return assemble_neighbor_features(r, neighborlists).reshape(r.shape[0], r.shape[1], -1)
+            
+            glow = GlowBlock(dim=DIM, dt=1/N_STEPS_FLOW, hidden_dims=HIDDEN_DIMS, data_size = 17, data_expansion=data_expansion)
+        else:
+            glow = GlowBlock(dim=DIM, hidden_dims=HIDDEN_DIMS, dt = 1/N_STEPS_FLOW)
         
-        # glow = GlowBlock(dim=DIM, dt=0.001, hidden_dims=HIDDEN_DIMS, data_size = 17, data_expansion=data_expansion)
         flow = MultiStep(glow, N_STEPS_FLOW)
         optimizer = optim.Adam(flow.parameters(), lr=LR)
 
         train_start = time.perf_counter()
         vals, losses_train = train_and_summarize(
             model=flow,
-            loss_fn=loss_fn,
+            loss_fn=loss_KL,
             data_generator=data_gen,
             optimizer=optimizer,
             epochs=EPOCHS,
@@ -359,9 +357,8 @@ def main(runtype = 'RealNVP'):
             inverse=False
         )
         train_end = time.perf_counter()
-        compositions = vals
         losses = losses_train
-        K, sample_time, _ = graphing(compositions, output_dir, data_gen, losses)
+        K, sample_time, _ = graphing(vals, output_dir, data_gen, losses)
         return K, sample_time, (train_end - train_start)
     elif runtype == 'leapfrog':
         output_dir = f'Figures/LeapFrog_NA{NA}_KT{KT}'
@@ -374,6 +371,8 @@ def main(runtype = 'RealNVP'):
         x0 = next(data_gen())
         x = copy.deepcopy(x0)
         logJ = 0.0
+
+        overall_interactions = torch.zeros((300*BATCH_SIZE, 6), dtype=torch.float32)
         
         t0 = time.perf_counter()
         for epoch in range(3000):
@@ -382,16 +381,20 @@ def main(runtype = 'RealNVP'):
             x = {k: v.detach().requires_grad_(True) for k, v in x_new.items()}
             if (epoch+1) % 10 == 0:
                 print(f"Leapfrog training epoch {epoch+1}/3000")
-                feat = feature_extractor(x)
-                vals.append(feat.detach())
+                
+                if do_interactions:
+                    feat, interactions = feature_extractor(x)
+                    overall_interactions[(epoch//10)*BATCH_SIZE:((epoch//10)+1)*BATCH_SIZE] = interactions
+                else:
+                    feat = feature_extractor(x)
+                vals.append(feat)
                 
                 #for the first time, record time
                 if epoch == 9:
                     t2 = time.perf_counter()
-        compositions = vals
         t1 = time.perf_counter()
-        graphing(compositions, output_dir, data_gen)
-        return 0, (t2-t0), (t1 - t0)
+        K, _, _ = graphing(vals, output_dir, data_gen)
+        return K, (t2-t0), (t1 - t0), overall_interactions.mean(dim=0).detach().cpu()
     else:
         assert False, f"Unknown runtype: {runtype}"
     print("Training complete.")
@@ -399,16 +402,29 @@ def main(runtype = 'RealNVP'):
 if __name__ == "__main__":
     SIGMA = 5
     leapfrogdt = 0.5
-    do_times_plot = True
-    times_config = {
-        'NAs': [64, 216, 512],
-        'kT': 1.0,
-        'makedata': True
-    }
+
+    do_interactions = True
+
+    if do_interactions:
+        MU = torch.tensor([0,0], dtype=torch.float32)
+        E1 = torch.tensor([[-0.3,-0.5],[-0.5,-0.1]], dtype=torch.float32)
+        E2 = torch.tensor([[-0.05,-0],[-0,-0.05]], dtype=torch.float32)
+    else:
+        MU = torch.tensor([2,3], dtype=torch.float32)
+        E1 = torch.tensor([[0,0],[0,0]], dtype=torch.float32)
+        E2 = torch.tensor([[0,0],[0,0]], dtype=torch.float32)
+
     do_temperatures_plot = True
     temperatures_config = {
         'NA': 216,
         'kTs': [0.25, 0.5, 1.0, 2.0, 4.0],
+        'makedata': True
+    }
+
+    do_times_plot = False
+    times_config = {
+        'NAs': [64, 216, 512],
+        'kT': 1.0,
         'makedata': True
     }
 
@@ -419,79 +435,94 @@ if __name__ == "__main__":
         Ks_NVP = []
         Ks_Glow = []
         Ks_LeapFrog = []
+        LeapFrog_interactions = []
         
         if makedata:
             for i, KT in enumerate(kTs):
-                K_LeapFrog, samples_time_LeapFrog, train_time_LeapFrog = main(runtype='leapfrog')
-                K_Glow, samples_time_Glow, train_time_Glow = main(runtype='Glow')
-                K_NVP, samples_time_NVP, train_time_NVP = main(runtype='RealNVP')
-                
-                Ks_NVP.append(K_NVP)
-                Ks_Glow.append(K_Glow)
-                Ks_LeapFrog.append(K_LeapFrog)
+                print(f"Running simulations for kT={KT} ({i+1}/{len(kTs)})")
+                # K_LeapFrog, samples_time_LeapFrog, train_time_LeapFrog, interactions = main(runtype='leapfrog', KT=KT, NA=NA)
+                K_Glow, samples_time_Glow, train_time_Glow = main(runtype='Glow', KT=KT, NA=NA)
+                # K_NVP, samples_time_NVP, train_time_NVP = main(runtype='RealNVP', KT=KT, NA=NA)
 
-            #simulation results
-            lnK_NVP = torch.log(torch.tensor(Ks_NVP, dtype=torch.float32))
-            lnK_Glow = torch.log(torch.tensor(Ks_Glow, dtype=torch.float32))
-            lnK_LeapFrog = torch.log(torch.tensor(Ks_LeapFrog, dtype=torch.float32))
-        else: #load data from json
-            with open('Figures/temperatures_data.json', 'r') as f:
-                vant_hoff_data = json.load(f)
-            lnK_NVP = torch.tensor(vant_hoff_data['lnK_NVP'], dtype=torch.float32)
-            lnK_Glow = torch.tensor(vant_hoff_data['lnK_Glow'], dtype=torch.float32)
-            lnK_LeapFrog = torch.tensor(vant_hoff_data['lnK_LeapFrog'], dtype=torch.float32)
-        # raise SystemExit("Finished running all KTs, exiting before plotting.")
+        #         Ks_NVP.append(K_NVP)
+        #         Ks_Glow.append(K_Glow)
+        #         Ks_LeapFrog.append(K_LeapFrog)
+        #         interactions[0] /= 864
+        #         interactions[1] /= 864
+        #         interactions[2] /= 864
+        #         interactions[3] /= 2592
+        #         interactions[4] /= 2592
+        #         interactions[5] /= 2592
+        #         LeapFrog_interactions.append(interactions)
 
-        fig, ax = plt.subplots(figsize=(6, 4))
-        one_kT = 1 / torch.tensor(kTs, dtype=torch.float32)
+        #     #simulation results
+        #     lnK_NVP = torch.log(torch.tensor(Ks_NVP, dtype=torch.float32))
+        #     lnK_Glow = torch.log(torch.tensor(Ks_Glow, dtype=torch.float32))
+        #     lnK_LeapFrog = torch.log(torch.tensor(Ks_LeapFrog, dtype=torch.float32))
+        # else: #load data from json
+        #     with open('Figures/temperatures_data.json', 'r') as f:
+        #         vant_hoff_data = json.load(f)
+        #     lnK_NVP = torch.tensor(vant_hoff_data['lnK_NVP'], dtype=torch.float32)
+        #     lnK_Glow = torch.tensor(vant_hoff_data['lnK_Glow'], dtype=torch.float32)
+        #     lnK_LeapFrog = torch.tensor(vant_hoff_data['lnK_LeapFrog'], dtype=torch.float32)
+        # # raise SystemExit("Finished running all KTs, exiting before plotting.")
+
+        # fig, ax = plt.subplots(figsize=(6, 4))
+        # one_kT = 1 / torch.tensor(kTs, dtype=torch.float32)
         
-        ax.scatter(one_kT.numpy(), lnK_NVP.numpy(), label='RealNVP', color='b')
-        ax.scatter(one_kT.numpy(), lnK_Glow.numpy(), label='Glow', color='g')
-        ax.scatter(one_kT.numpy(), lnK_LeapFrog.numpy(), label='LeapFrog', color='r')
+        # ax.scatter(one_kT.numpy(), lnK_NVP.numpy(), label='RealNVP', color='b')
+        # ax.scatter(one_kT.numpy(), lnK_Glow.numpy(), label='Glow', color='g')
+        # ax.scatter(one_kT.numpy(), lnK_LeapFrog.numpy(), label='LeapFrog', color='r')
 
-        #calculate fit lines for each method
-        coeffs_NVP = np.polyfit(one_kT.numpy(), lnK_NVP.numpy(), 1)
-        coeffs_Glow = np.polyfit(one_kT.numpy(), lnK_Glow.numpy(), 1)
-        coeffs_LeapFrog = np.polyfit(one_kT.numpy(), lnK_LeapFrog.numpy(), 1)
-        fit_line_NVP = np.polyval(coeffs_NVP, one_kT.numpy())
-        fit_line_Glow = np.polyval(coeffs_Glow, one_kT.numpy())
-        fit_line_LeapFrog = np.polyval(coeffs_LeapFrog, one_kT.numpy())
+        # #calculate fit lines for each method
+        # coeffs_NVP = np.polyfit(one_kT.numpy(), lnK_NVP.numpy(), 1)
+        # coeffs_Glow = np.polyfit(one_kT.numpy(), lnK_Glow.numpy(), 1)
+        # coeffs_LeapFrog = np.polyfit(one_kT.numpy(), lnK_LeapFrog.numpy(), 1)
+        # fit_line_NVP = np.polyval(coeffs_NVP, one_kT.numpy())
+        # fit_line_Glow = np.polyval(coeffs_Glow, one_kT.numpy())
+        # fit_line_LeapFrog = np.polyval(coeffs_LeapFrog, one_kT.numpy())
 
-        #draw fit lines for each method
-        # ax.plot(one_kT.numpy(), fit_line_NVP, label='RealNVP Fit: ' + f'{coeffs_NVP[0]:.2f}x + {coeffs_NVP[1]:.2f}', color='b', linestyle='--')
-        # ax.plot(one_kT.numpy(), fit_line_Glow, label='Glow Fit: ' + f'{coeffs_Glow[0]:.2f}x + {coeffs_Glow[1]:.2f}', color='g', linestyle='--')
-        # ax.plot(one_kT.numpy(), fit_line_LeapFrog, label='LeapFrog Fit: ' + f'{coeffs_LeapFrog[0]:.2f}x + {coeffs_LeapFrog[1]:.2f}', color='r', linestyle='--')
+        # #draw fit lines for each method
+        # # ax.plot(one_kT.numpy(), fit_line_NVP, label='RealNVP Fit: ' + f'{coeffs_NVP[0]:.2f}x + {coeffs_NVP[1]:.2f}', color='b', linestyle='--')
+        # # ax.plot(one_kT.numpy(), fit_line_Glow, label='Glow Fit: ' + f'{coeffs_Glow[0]:.2f}x + {coeffs_Glow[1]:.2f}', color='g', linestyle='--')
+        # # ax.plot(one_kT.numpy(), fit_line_LeapFrog, label='LeapFrog Fit: ' + f'{coeffs_LeapFrog[0]:.2f}x + {coeffs_LeapFrog[1]:.2f}', color='r', linestyle='--')
 
-        #thoeretical results
-        lnK_theory = -(MU[1] - MU[0]) * one_kT
-        print("Theoretical lnK values:", lnK_theory.numpy())
-        ax.plot(one_kT.numpy(), lnK_theory.numpy(), label='Theory', linestyle='-', color='k') 
+        # #thoeretical results
+        # lnK_theory = -(MU[1] - MU[0]) * one_kT
+        # print("Theoretical lnK values:", lnK_theory.numpy())
+        # ax.plot(one_kT.numpy(), lnK_theory.numpy(), label='Theory', linestyle='-', color='k') 
 
-        ax.set_xlabel('1/kT')
-        ax.set_ylabel('ln(K)')
-        ax.set_title('Van\'t Hoff Plot')
+        # ax.set_xlabel('1/kT')
+        # ax.set_ylabel('ln(K)')
+        # ax.set_title('Van\'t Hoff Plot')
 
-        #Properly order legend with scatter data then fit lines then theory
-        handles, labels = ax.get_legend_handles_labels()
-        scatter_handles = [h for h in handles if isinstance(h, plt.Line2D) and h.get_linestyle() == '']
-        fit_handles = [h for h in handles if isinstance(h, plt.Line2D) and h.get_linestyle() == '--']
-        theory_handles = [h for h in handles if isinstance(h, plt.Line2D) and h.get_linestyle() == '-']
-        ax.legend(scatter_handles + fit_handles + theory_handles, labels=labels)
+        # #Properly order legend with scatter data then fit lines then theory
+        # handles, labels = ax.get_legend_handles_labels()
+        # scatter_handles = [h for h in handles if isinstance(h, plt.Line2D) and h.get_linestyle() == '']
+        # fit_handles = [h for h in handles if isinstance(h, plt.Line2D) and h.get_linestyle() == '--']
+        # theory_handles = [h for h in handles if isinstance(h, plt.Line2D) and h.get_linestyle() == '-']
+        # ax.legend(scatter_handles + fit_handles + theory_handles, labels=labels)
 
-        fig.tight_layout()
-        fig.savefig(f'Figures/temperatures/vant_hoff_plot.png')
-        #save to a dict
-        vant_hoff_data = {
-            '1/kT': one_kT.tolist(),
-            'lnK_NVP': lnK_NVP.tolist(),
-            'lnK_Glow': lnK_Glow.tolist(),
-            'lnK_LeapFrog': lnK_LeapFrog.tolist(),
-            'lnK_theory': lnK_theory.tolist()
-        }
-        #save as json
-        import json
-        with open('Figures/temperatures/vant_hoff_data.json', 'w') as f:
-            json.dump(vant_hoff_data, f, indent=4)
+        # fig.tight_layout()
+        # fig.savefig(f'Figures/temperatures/vant_hoff_plot.png')
+        # #save to a dict
+        # vant_hoff_data = {
+        #     '1/kT': one_kT.tolist(),
+        #     'lnK_NVP': lnK_NVP.tolist(),
+        #     'lnK_Glow': lnK_Glow.tolist(),
+        #     'lnK_LeapFrog': lnK_LeapFrog.tolist(),
+        #     'lnK_theory': lnK_theory.tolist()
+        # }
+        # #save as json
+        # with open('Figures/temperatures/vant_hoff_data.json', 'w') as f:
+        #     json.dump(vant_hoff_data, f, indent=4)
+
+        # data = {
+        #     'KTs': kTs,
+        #     'interactions': [interactions.tolist() for interactions in LeapFrog_interactions],
+        # }
+        # with open(f'Figures/LeapFrog_interactions_vs_temperature.json', 'w') as f:
+        #     json.dump(data, f, indent=4)
 
     if do_times_plot:
         NAs = times_config['NAs']
@@ -507,9 +538,9 @@ if __name__ == "__main__":
             train_times_LeapFrog = []
             for NA in NAs:
                     
-                K_Glow, samples_time_Glow, train_time_Glow = main(runtype='Glow')
-                K_LeapFrog, samples_time_LeapFrog, train_time_LeapFrog = main(runtype='leapfrog')
-                K_NVP, samples_time_NVP, train_time_NVP = main(runtype='RealNVP')
+                K_Glow, samples_time_Glow, train_time_Glow = main(runtype='Glow', KT=KT, NA=NA)
+                K_LeapFrog, samples_time_LeapFrog, train_time_LeapFrog, interactions = main(runtype='leapfrog', KT=KT, NA=NA)
+                K_NVP, samples_time_NVP, train_time_NVP = main(runtype='RealNVP', KT=KT, NA=NA)
 
                 samples_times_NVP.append(samples_time_NVP)
                 samples_times_Glow.append(samples_time_Glow)

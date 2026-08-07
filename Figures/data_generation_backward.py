@@ -19,8 +19,8 @@ DIM = 2
 LR = 1e-3
 TRAIN_ITERS = 11
 N_STEPS_FLOW = 4
-EPOCHS = 25
-HIDDEN_DIMS = [8,8,8]
+EPOCHS = 150
+HIDDEN_DIMS = [32,16,16,16] #[8,8,8]
 
 def main(runtype = 'RealNVP', samples_LeapFrog = None, NA = 216, KT = 1.0):
     PDB_PATH = Path(f'examples/GaAs/GaAs{NA}.pdb')
@@ -255,10 +255,9 @@ def main(runtype = 'RealNVP', samples_LeapFrog = None, NA = 216, KT = 1.0):
         logp = logpr
 
         if runtype == "Glow":
-            Ndof = z["p"].size(-2)*z["p"].size(-1)
             logpp = (
                 -0.5 * math.log(2.0 * math.pi * KT)
-                - 0.5 * z["p"].square() / (KT*Ndof)
+                - 0.5 * z["p"].square() / (KT)
             ).sum(dim=(1, 2))
             logp = logp + logpp
 
@@ -524,7 +523,7 @@ def main(runtype = 'RealNVP', samples_LeapFrog = None, NA = 216, KT = 1.0):
         K, sample_time, _ = graphing(vals, output_dir, data_gen_NVP, losses)
         return K, sample_time, (train_end - train_start)
     elif runtype == 'Glow':
-        output_dir = f'Figures/Glow_NA{NA}_KT{KT}'
+        output_dir = f'Figures/newbackwards/Glow_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         if do_interactions:
             def data_expansion(r):
@@ -552,7 +551,7 @@ def main(runtype = 'RealNVP', samples_LeapFrog = None, NA = 216, KT = 1.0):
         K, sample_time, _ = graphing(vals, output_dir, data_gen, losses)
         return K, sample_time, (train_end - train_start)
     elif runtype == 'leapfrog':
-        output_dir = f'Figures/LeapFrog_NA{NA}_KT{KT}'
+        output_dir = f'Figures/newbackwards/LeapFrog_NA{NA}_KT{KT}'
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         def U(r, t):
             return compute_energy_parameterized(assemble_neighbor_features(r, neighborlists), MU, E1, E2, sigma=SIGMA).sum(1)
@@ -622,7 +621,7 @@ if __name__ == "__main__":
         'makedata': True
     }
 
-    do_times_plot = True
+    do_times_plot = False
     times_config = {
         'NAs': [64, 216, 512],
         'kT': 1.0,
@@ -643,87 +642,87 @@ if __name__ == "__main__":
                 print(f"Running simulations for kT={KT} ({i+1}/{len(kTs)})")
                 K_LeapFrog, samples_time_LeapFrog, train_time_LeapFrog, samples_LeapFrog, interactions = main(runtype='leapfrog', KT=KT, NA=NA)
                 K_Glow, samples_time_Glow, train_time_Glow = main(runtype='Glow', samples_LeapFrog=samples_LeapFrog, KT=KT, NA=NA)
-                K_NVP, samples_time_NVP, train_time_NVP = main(runtype='RealNVP', samples_LeapFrog=samples_LeapFrog, KT=KT, NA=NA)
+        #         K_NVP, samples_time_NVP, train_time_NVP = main(runtype='RealNVP', samples_LeapFrog=samples_LeapFrog, KT=KT, NA=NA)
                 
-                Ks_NVP.append(K_NVP)
-                Ks_Glow.append(K_Glow)
-                Ks_LeapFrog.append(K_LeapFrog)
-                interactions[0] /= 864
-                interactions[1] /= 864
-                interactions[2] /= 864
-                interactions[3] /= 2592
-                interactions[4] /= 2592
-                interactions[5] /= 2592
-                LeapFrog_interactions.append(interactions)
+        #         Ks_NVP.append(K_NVP)
+        #         Ks_Glow.append(K_Glow)
+        #         Ks_LeapFrog.append(K_LeapFrog)
+        #         interactions[0] /= 864
+        #         interactions[1] /= 864
+        #         interactions[2] /= 864
+        #         interactions[3] /= 2592
+        #         interactions[4] /= 2592
+        #         interactions[5] /= 2592
+        #         LeapFrog_interactions.append(interactions)
 
-            #simulation results
-            lnK_NVP = torch.log(torch.tensor(Ks_NVP, dtype=torch.float32))
-            lnK_Glow = torch.log(torch.tensor(Ks_Glow, dtype=torch.float32))
-            lnK_LeapFrog = torch.log(torch.tensor(Ks_LeapFrog, dtype=torch.float32))
-        else: #load data from json
-            with open('Figures/temperatures_data.json', 'r') as f:
-                vant_hoff_data = json.load(f)
-            lnK_NVP = torch.tensor(vant_hoff_data['lnK_NVP'], dtype=torch.float32)
-            lnK_Glow = torch.tensor(vant_hoff_data['lnK_Glow'], dtype=torch.float32)
-            lnK_LeapFrog = torch.tensor(vant_hoff_data['lnK_LeapFrog'], dtype=torch.float32)
-        # raise SystemExit("Finished running all KTs, exiting before plotting.")
+        #     #simulation results
+        #     lnK_NVP = torch.log(torch.tensor(Ks_NVP, dtype=torch.float32))
+        #     lnK_Glow = torch.log(torch.tensor(Ks_Glow, dtype=torch.float32))
+        #     lnK_LeapFrog = torch.log(torch.tensor(Ks_LeapFrog, dtype=torch.float32))
+        # else: #load data from json
+        #     with open('Figures/temperatures_data.json', 'r') as f:
+        #         vant_hoff_data = json.load(f)
+        #     lnK_NVP = torch.tensor(vant_hoff_data['lnK_NVP'], dtype=torch.float32)
+        #     lnK_Glow = torch.tensor(vant_hoff_data['lnK_Glow'], dtype=torch.float32)
+        #     lnK_LeapFrog = torch.tensor(vant_hoff_data['lnK_LeapFrog'], dtype=torch.float32)
+        # # raise SystemExit("Finished running all KTs, exiting before plotting.")
 
-        fig, ax = plt.subplots(figsize=(6, 4))
-        one_kT = 1 / torch.tensor(kTs, dtype=torch.float32)
+        # fig, ax = plt.subplots(figsize=(6, 4))
+        # one_kT = 1 / torch.tensor(kTs, dtype=torch.float32)
         
-        ax.scatter(one_kT.numpy(), lnK_NVP.numpy(), label='RealNVP', color='b')
-        ax.scatter(one_kT.numpy(), lnK_Glow.numpy(), label='Glow', color='g')
-        ax.scatter(one_kT.numpy(), lnK_LeapFrog.numpy(), label='LeapFrog', color='r')
+        # ax.scatter(one_kT.numpy(), lnK_NVP.numpy(), label='RealNVP', color='b')
+        # ax.scatter(one_kT.numpy(), lnK_Glow.numpy(), label='Glow', color='g')
+        # ax.scatter(one_kT.numpy(), lnK_LeapFrog.numpy(), label='LeapFrog', color='r')
 
-        #calculate fit lines for each method
-        coeffs_NVP = np.polyfit(one_kT.numpy(), lnK_NVP.numpy(), 1)
-        coeffs_Glow = np.polyfit(one_kT.numpy(), lnK_Glow.numpy(), 1)
-        coeffs_LeapFrog = np.polyfit(one_kT.numpy(), lnK_LeapFrog.numpy(), 1)
-        fit_line_NVP = np.polyval(coeffs_NVP, one_kT.numpy())
-        fit_line_Glow = np.polyval(coeffs_Glow, one_kT.numpy())
-        fit_line_LeapFrog = np.polyval(coeffs_LeapFrog, one_kT.numpy())
+        # #calculate fit lines for each method
+        # coeffs_NVP = np.polyfit(one_kT.numpy(), lnK_NVP.numpy(), 1)
+        # coeffs_Glow = np.polyfit(one_kT.numpy(), lnK_Glow.numpy(), 1)
+        # coeffs_LeapFrog = np.polyfit(one_kT.numpy(), lnK_LeapFrog.numpy(), 1)
+        # fit_line_NVP = np.polyval(coeffs_NVP, one_kT.numpy())
+        # fit_line_Glow = np.polyval(coeffs_Glow, one_kT.numpy())
+        # fit_line_LeapFrog = np.polyval(coeffs_LeapFrog, one_kT.numpy())
 
-        #draw fit lines for each method
-        # ax.plot(one_kT.numpy(), fit_line_NVP, label='RealNVP Fit: ' + f'{coeffs_NVP[0]:.2f}x + {coeffs_NVP[1]:.2f}', color='b', linestyle='--')
-        # ax.plot(one_kT.numpy(), fit_line_Glow, label='Glow Fit: ' + f'{coeffs_Glow[0]:.2f}x + {coeffs_Glow[1]:.2f}', color='g', linestyle='--')
-        # ax.plot(one_kT.numpy(), fit_line_LeapFrog, label='LeapFrog Fit: ' + f'{coeffs_LeapFrog[0]:.2f}x + {coeffs_LeapFrog[1]:.2f}', color='r', linestyle='--')
+        # #draw fit lines for each method
+        # # ax.plot(one_kT.numpy(), fit_line_NVP, label='RealNVP Fit: ' + f'{coeffs_NVP[0]:.2f}x + {coeffs_NVP[1]:.2f}', color='b', linestyle='--')
+        # # ax.plot(one_kT.numpy(), fit_line_Glow, label='Glow Fit: ' + f'{coeffs_Glow[0]:.2f}x + {coeffs_Glow[1]:.2f}', color='g', linestyle='--')
+        # # ax.plot(one_kT.numpy(), fit_line_LeapFrog, label='LeapFrog Fit: ' + f'{coeffs_LeapFrog[0]:.2f}x + {coeffs_LeapFrog[1]:.2f}', color='r', linestyle='--')
 
-        #thoeretical results
-        lnK_theory = -(MU[1] - MU[0]) * one_kT
-        print("Theoretical lnK values:", lnK_theory.numpy())
-        ax.plot(one_kT.numpy(), lnK_theory.numpy(), label='Theory', linestyle='-', color='k') 
+        # #thoeretical results
+        # lnK_theory = -(MU[1] - MU[0]) * one_kT
+        # print("Theoretical lnK values:", lnK_theory.numpy())
+        # ax.plot(one_kT.numpy(), lnK_theory.numpy(), label='Theory', linestyle='-', color='k') 
 
-        ax.set_xlabel('1/kT')
-        ax.set_ylabel('ln(K)')
-        ax.set_title('Van\'t Hoff Plot')
+        # ax.set_xlabel('1/kT')
+        # ax.set_ylabel('ln(K)')
+        # ax.set_title('Van\'t Hoff Plot')
 
-        #Properly order legend with scatter data then fit lines then theory
-        handles, labels = ax.get_legend_handles_labels()
-        scatter_handles = [h for h in handles if isinstance(h, plt.Line2D) and h.get_linestyle() == '']
-        fit_handles = [h for h in handles if isinstance(h, plt.Line2D) and h.get_linestyle() == '--']
-        theory_handles = [h for h in handles if isinstance(h, plt.Line2D) and h.get_linestyle() == '-']
-        ax.legend(scatter_handles + fit_handles + theory_handles, labels=labels)
+        # #Properly order legend with scatter data then fit lines then theory
+        # handles, labels = ax.get_legend_handles_labels()
+        # scatter_handles = [h for h in handles if isinstance(h, plt.Line2D) and h.get_linestyle() == '']
+        # fit_handles = [h for h in handles if isinstance(h, plt.Line2D) and h.get_linestyle() == '--']
+        # theory_handles = [h for h in handles if isinstance(h, plt.Line2D) and h.get_linestyle() == '-']
+        # ax.legend(scatter_handles + fit_handles + theory_handles, labels=labels)
 
-        fig.tight_layout()
-        fig.savefig(f'Figures/temperatures/vant_hoff_plot.png')
-        #save to a dict
-        vant_hoff_data = {
-            '1/kT': one_kT.tolist(),
-            'lnK_NVP': lnK_NVP.tolist(),
-            'lnK_Glow': lnK_Glow.tolist(),
-            'lnK_LeapFrog': lnK_LeapFrog.tolist(),
-            'lnK_theory': lnK_theory.tolist()
-        }
-        #save as json
-        with open('Figures/temperatures/vant_hoff_data.json', 'w') as f:
-            json.dump(vant_hoff_data, f, indent=4)
+        # fig.tight_layout()
+        # fig.savefig(f'Figures/temperatures/vant_hoff_plot.png')
+        # #save to a dict
+        # vant_hoff_data = {
+        #     '1/kT': one_kT.tolist(),
+        #     'lnK_NVP': lnK_NVP.tolist(),
+        #     'lnK_Glow': lnK_Glow.tolist(),
+        #     'lnK_LeapFrog': lnK_LeapFrog.tolist(),
+        #     'lnK_theory': lnK_theory.tolist()
+        # }
+        # #save as json
+        # with open('Figures/temperatures/vant_hoff_data.json', 'w') as f:
+        #     json.dump(vant_hoff_data, f, indent=4)
 
-        data = {
-            'KTs': kTs,
-            'interactions': [interactions.tolist() for interactions in LeapFrog_interactions],
-        }
-        with open(f'Figures/LeapFrog_interactions_vs_temperature.json', 'w') as f:
-            json.dump(data, f, indent=4)
+        # data = {
+        #     'KTs': kTs,
+        #     'interactions': [interactions.tolist() for interactions in LeapFrog_interactions],
+        # }
+        # with open(f'Figures/LeapFrog_interactions_vs_temperature.json', 'w') as f:
+        #     json.dump(data, f, indent=4)
 
     if do_times_plot:
         NAs = times_config['NAs']
