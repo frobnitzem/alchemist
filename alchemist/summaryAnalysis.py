@@ -5,7 +5,7 @@ import torch.optim as optim
 
 from pathlib import Path
 
-from alchemist.flows import GlowBlock, MultiStep, Q, MultiIndependent, RealNVP
+from alchemist.flows import GlowBlock, MultiStep, Q, RealNVP
 from alchemist.pdbs import read_pdb_coords, write_pdb_trajectory
 from alchemist.neighbors import compute_neighbor_masks, get_neighbor_indices, assemble_neighbor_features
 from alchemist.ml_utils import train_and_summarize

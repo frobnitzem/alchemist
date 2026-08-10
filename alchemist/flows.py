@@ -25,7 +25,7 @@ def dot_x(x,y):
 def fix_kT(p, kT):
     Ndof = p.size(-2)*p.size(-1)
     p2 = dot_x(p, p)
-    return p*torch.sqrt(Ndof / p2)[...,None,None]
+    return p*torch.sqrt(Ndof * kT / p2)[...,None,None]
 
 class LeapFrog(nn.Module):
     def __init__(self, en, dt=0.001, const_kT: Optional[float] = None):
@@ -125,23 +125,25 @@ class GlowBlock(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def st1(self, r, t):
+    def st1(self, r, tau):
         #add time as an input to the network
-        t = t.expand(r.size(0))  # now shape (B,)
-        r_time = torch.cat([r, t[:, None, None].expand(-1, r.size(1), 1)], dim=-1)
+        tau = tau.expand(r.size(0))  # now shape (B,)
+        r_time = torch.cat([r, tau[:, None, None].expand(-1, r.size(1), 1)], dim=-1)
         s = self.step1(r_time).clamp(-4,4)
         t = self.step2(r_time)
         return (s,t)
 
-    def st2(self, r, t):
-        t = t.expand(r.size(0))  # now shape (B,)
-        r_time = torch.cat([r, t[:, None, None].expand(-1, r.size(1), 1)], dim=-1)
+    def st2(self, r, tau):
+        tau = tau.expand(r.size(0))  # now shape (B,)
+        r_time = torch.cat([r, tau[:, None, None].expand(-1, r.size(1), 1)], dim=-1)
         s = self.step3(r_time).clamp(-4,4)
         t = self.step4(r_time)
         return (s,t)
 
     def forward(self, x, inverse=False, info={}):
         if inverse:
+            x['t'] = x['t'] - self.dt
+
             s, t = self.st2(self.data_expansion(x['r']), x['t'])
             x['p'] = (x['p'] - t)*torch.exp(-s)
 
@@ -150,7 +152,6 @@ class GlowBlock(nn.Module):
             s, t = self.st1(self.data_expansion(x['p']), x['t'])
             x['r'] = (x['r'] - t)*torch.exp(-s)
 
-            x['t'] = x['t'] - self.dt
             lJ += -s.sum(dim=(1,2))
         else:
             s, t = self.st1(self.data_expansion(x['p']), x['t'])
@@ -220,27 +221,27 @@ class MultiStep(nn.Module):
             logJ += lJ
         return x, logJ, info
 
-# class MultiIndependent(nn.Module):
-#     """
-#     Apply n independently trained copies of a given step module.
+class MultiIndependent(nn.Module):
+    """
+    Apply n independently trained copies of a given step module.
     
-#     Each layer is a deep copy of `step`, so all parameters are independent.
-#     """
-#     def __init__(self, step, n):
-#         super().__init__()
-#         self.n = n
+    Each layer is a deep copy of `step`, so all parameters are independent.
+    """
+    def __init__(self, step, n):
+        super().__init__()
+        self.n = n
 
-#         # Make n independent copies of the step module
-#         self.layers = nn.ModuleList([copy.deepcopy(step) for _ in range(n)])
+        # Make n independent copies of the step module
+        self.layers = nn.ModuleList([copy.deepcopy(step) for _ in range(n)])
 
-#     def forward(self, x, inverse=False, info={}):
-#         logJ = 0.0
+    def forward(self, x, inverse=False, info={}):
+        logJ = 0.0
 
-#         for layer in self.layers:
-#             x, lJ, info = layer(x, inverse=inverse, info=info)
-#             logJ += lJ
+        for layer in self.layers:
+            x, lJ, info = layer(x, inverse=inverse, info=info)
+            logJ += lJ
 
-#         return x, logJ, info
+        return x, logJ, info
 
 class glow_and_verlet_block(nn.Module):
     def __init__(self, dim, data_expansion = lambda r: r, data_size=1, dt=0.001, hidden_dims = [16]):
@@ -332,6 +333,9 @@ class RealNVP(nn.Module):
         logJ = torch.zeros(r_chem.shape[0], device=r_chem.device)
         
         for i in range(self.n_layers):
+            if inverse:
+                i = i + 1
+                x['t'] = x['t'] - self.dt
             # Alternating mask
             if i % 2 == 0:
                 r1 = r[:, :self.split, :]
@@ -357,7 +361,6 @@ class RealNVP(nn.Module):
             if inverse:
                 r2 = (r2 - t) * torch.exp(-s)
                 logJ += (-s).sum(dim=-1)
-                x['t'] = x['t'] - self.dt
             else:
                 r2 = r2 * torch.exp(s) + t
                 logJ += s.sum(dim=-1)
@@ -372,6 +375,8 @@ class RealNVP(nn.Module):
                 r = torch.cat([r1, r2], dim=-2)
             else:
                 r = torch.cat([r2, r1], dim=-2)
+                
+            r_chem = r[:,:,:-3]
 
-        x['r'] = r[:, :, :-3]  # Only keep chemical identities
+        x['r'] = r_chem  # Only keep chemical identities
         return x, logJ, info
