@@ -183,7 +183,9 @@ def main():
         return loss.mean()
 
     def loss_KL(x0,x,logJ):
-        
+        # convert to logits
+        #dr0 = x0['r']).softmax(-1)
+        #dr  =  x['r']).softmax(-1)
         assembled = assemble_neighbor_features(x['r'], neighborlists)
         energy = compute_energy_parameterized(assembled, MU, E1, E2)
         
@@ -391,8 +393,8 @@ def main():
     print("Results saved to output directory:", output_dir)
 
 if __name__ == "__main__":
-
-    for i in range(1,10):
+    #for i in range(1,10):
+    for i in [8]:
         KT = 1*10**(1-i)
-        output_dir = f'outputs/only_train_kT{i}'
+        output_dir = f'outputs/train_dmr'
         main()
