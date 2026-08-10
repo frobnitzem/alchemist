@@ -127,15 +127,15 @@ class GlowBlock(nn.Module):
 
     def st1(self, r, tau):
         #add time as an input to the network
-        tau = tau.expand(r.size(0))  # now shape (B,)
-        r_time = torch.cat([r, tau[:, None, None].expand(-1, r.size(1), 1)], dim=-1)
+        tau = torch.full(r.shape[:-1], tau).unsqueeze(-1)
+        r_time = torch.cat([r, tau], dim=-1)
         s = self.step1(r_time).clamp(-4,4)
         t = self.step2(r_time)
         return (s,t)
 
     def st2(self, r, tau):
-        tau = tau.expand(r.size(0))  # now shape (B,)
-        r_time = torch.cat([r, tau[:, None, None].expand(-1, r.size(1), 1)], dim=-1)
+        tau = torch.full(r.shape[:-1], tau).unsqueeze(-1)
+        r_time = torch.cat([r, tau], dim=-1)
         s = self.step3(r_time).clamp(-4,4)
         t = self.step4(r_time)
         return (s,t)
