@@ -262,7 +262,7 @@ def main(runtype = 'RealNVP', samples_LeapFrog = None, NA = 216, KT = 1.0):
             logp = logp + logpp
 
         nll = -(logp + logJ).mean()
-        return nll, z["r"].new_zeros(())
+        return nll
 
     def feature_extractor(x):
         B, N, D = x['r'].shape
@@ -317,36 +317,6 @@ def main(runtype = 'RealNVP', samples_LeapFrog = None, NA = 216, KT = 1.0):
             #     x, _, _ = flow(x)
             #     x = {k: v.detach().requires_grad_(True) for k, v in x_new.items()}
         t1 = time.perf_counter()
-        
-        # per_atom_energy = per_atom_energy.detach()
-        # p_a_all = p_a_all.detach()
-
-        # # flat_energy = per_atom_energy.flatten()
-        # flat_p_a = p_a_all.flatten()
-        
-        # fig2, axes2 = plt.subplots(2, 2, figsize=(12, 10))
-        
-        # (0,0) 2D Histogram: p_a vs Energy
-        # axes2[0,0].hist2d(flat_p_a.numpy(), flat_energy.numpy(), bins=30)
-        # axes2[0,0].set_title(f"Energy vs Composition with {runtype} Flow, NA={NA}, kT={KT}")
-        # axes2[0,0].set_xlabel("p_a")
-        # axes2[0,0].set_ylabel("Energy")
-        
-        # # (0,1) Marginal: Energy Distribution
-        # axes2[0,1].hist(flat_energy.numpy(), bins=30)
-        # axes2[0,1].set_title(f"Energy Marginal with {runtype} Flow, NA={NA}, kT={KT}")
-        # axes2[0,1].set_xlabel("Energy")
-        
-        # # (1,0) Marginal: p_a Distribution
-        # argmax_p_a = (flat_p_a > 0.5).float()
-        # axes2[1,0].hist(flat_p_a.numpy(), bins=30)
-        # axes2[1,0].set_title(f"Composition Marginal: AVG p_a = {argmax_p_a.mean().item():.3f}")
-        # axes2[1,0].set_xlabel("p_a")
-        
-        # axes2[1,1].axis('off') # Empty panel
-        
-        # plt.tight_layout()
-        # plt.savefig(f'{output_dir}/energy_analysis.png')
 
         # Plot 3: Loss and composition double plot
         fig3, axes3 = plt.subplots(1, 1, figsize=(6,4))
@@ -366,8 +336,7 @@ def main(runtype = 'RealNVP', samples_LeapFrog = None, NA = 216, KT = 1.0):
             losses = torch.tensor(losses).detach().numpy() # (EPOCHS, 2) -> (EPOCHS, 2)
             all_losses = losses[:, 0]
             lJ_losses = -losses[:, 1]
-            boundary_losses = losses[:,2]
-            U_losses = all_losses - lJ_losses - boundary_losses
+            U_losses = all_losses - lJ_losses
 
             axes4 = axes3.twinx()  # instantiate a second Axes that shares the same x-axis
             color = 'tab:blue'
@@ -375,7 +344,6 @@ def main(runtype = 'RealNVP', samples_LeapFrog = None, NA = 216, KT = 1.0):
             axes4.plot(all_losses, color=color, label='Total Loss')
             axes4.plot(lJ_losses, color='tab:orange', label='-logJ')
             axes4.plot(U_losses, color='tab:green', label=r"$\Delta U$/kT")
-            axes4.plot(boundary_losses, color='tab:purple', label='Boundary Loss')
             axes4.tick_params(axis='y', labelcolor=color)
             axes4.set_ylim(-1000,1000)
             if do_interactions:
@@ -445,16 +413,6 @@ def main(runtype = 'RealNVP', samples_LeapFrog = None, NA = 216, KT = 1.0):
         #     plt.legend()
                 
         #     plt.savefig(f'{output_dir}/interactions_histogram.png', dpi=150)
-
-
-        # 6. Save Trajectory
-        # We need Ga percents for the PDB writer
-        # ga_percents = p_a_all
-        # as_percents = 1.0 - p_a_all
-        # #downsample by factor of 10
-        # ga_percents = ga_percents[::50]
-        # as_percents = as_percents[::50]
-        # write_pdb_trajectory(Path(f'{output_dir}/generated_samples.pdb'), coords, ga_percents, as_percents)
 
         # 7. Save model
         if losses is not None:

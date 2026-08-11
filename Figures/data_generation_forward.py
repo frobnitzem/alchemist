@@ -70,7 +70,7 @@ def main(runtype = 'RealNVP', KT = 1.0, NA = 216):
 
 
         loss = 1 / KT * (energy - energy0) - logJ
-        return loss.mean(), x["r"].new_zeros(())
+        return loss.mean()
 
 
     def feature_extractor(x):
@@ -95,8 +95,6 @@ def main(runtype = 'RealNVP', KT = 1.0, NA = 216):
     
     def graphing(compositions, output_dir,data_gen, losses = None):
         num_samples = 20
-        # per_atom_energy = torch.zeros(num_samples * BATCH_SIZE, NA)
-        # p_a_all = torch.zeros(num_samples * BATCH_SIZE, NA)
 
         if do_interactions:
             interactions = [comp[1] for comp in compositions]
@@ -116,45 +114,8 @@ def main(runtype = 'RealNVP', KT = 1.0, NA = 216):
         else: 
             last_compositions = torch.stack(compositions, dim=0).detach()[int(len(compositions)*4/5):] #(num_samples, D)
             p_A_overall = last_compositions.mean().item()
-            #if interactions
-            # x = data_gen().__next__()
-            # num_samples = 1
-            # for i in range(3000):
-            #     # if (i+1) % 200 == 0:
-            #     #     print(f"Generating sample {i+1}/{num_samples}")
-            #     x, _, _ = flow(x)
-            #     x = {k: v.detach().requires_grad_(True) for k, v in x_new.items()}
         t1 = time.perf_counter()
         
-        # per_atom_energy = per_atom_energy.detach()
-        # p_a_all = p_a_all.detach()
-
-        # # flat_energy = per_atom_energy.flatten()
-        # flat_p_a = p_a_all.flatten()
-        
-        # fig2, axes2 = plt.subplots(2, 2, figsize=(12, 10))
-        
-        # (0,0) 2D Histogram: p_a vs Energy
-        # axes2[0,0].hist2d(flat_p_a.numpy(), flat_energy.numpy(), bins=30)
-        # axes2[0,0].set_title(f"Energy vs Composition with {runtype} Flow, NA={NA}, kT={KT}")
-        # axes2[0,0].set_xlabel("p_a")
-        # axes2[0,0].set_ylabel("Energy")
-        
-        # # (0,1) Marginal: Energy Distribution
-        # axes2[0,1].hist(flat_energy.numpy(), bins=30)
-        # axes2[0,1].set_title(f"Energy Marginal with {runtype} Flow, NA={NA}, kT={KT}")
-        # axes2[0,1].set_xlabel("Energy")
-        
-        # # (1,0) Marginal: p_a Distribution
-        # argmax_p_a = (flat_p_a > 0.5).float()
-        # axes2[1,0].hist(flat_p_a.numpy(), bins=30)
-        # axes2[1,0].set_title(f"Composition Marginal: AVG p_a = {argmax_p_a.mean().item():.3f}")
-        # axes2[1,0].set_xlabel("p_a")
-        
-        # axes2[1,1].axis('off') # Empty panel
-        
-        # plt.tight_layout()
-        # plt.savefig(f'{output_dir}/energy_analysis.png')
 
         # Plot 3: Loss and composition double plot
         fig3, axes3 = plt.subplots(1, 1, figsize=(6,4))
@@ -174,8 +135,7 @@ def main(runtype = 'RealNVP', KT = 1.0, NA = 216):
             losses = torch.tensor(losses).detach().numpy() # (EPOCHS, 2) -> (EPOCHS, 2)
             all_losses = losses[:, 0]
             lJ_losses = -losses[:, 1]
-            boundary_losses = losses[:,2]
-            U_losses = all_losses - lJ_losses - boundary_losses
+            U_losses = all_losses - lJ_losses
 
             axes4 = axes3.twinx()  # instantiate a second Axes that shares the same x-axis
             color = 'tab:blue'
@@ -183,7 +143,6 @@ def main(runtype = 'RealNVP', KT = 1.0, NA = 216):
             axes4.plot(all_losses, color=color, label='Total Loss')
             axes4.plot(lJ_losses, color='tab:orange', label='-logJ')
             axes4.plot(U_losses, color='tab:green', label=r"$\Delta U$/kT")
-            axes4.plot(boundary_losses, color='tab:purple', label='Boundary Loss')
             axes4.tick_params(axis='y', labelcolor=color)
             # axes4.set_ylim(-100,500)
             if do_interactions:
@@ -208,61 +167,6 @@ def main(runtype = 'RealNVP', KT = 1.0, NA = 216):
         fig3.tight_layout()  # otherwise the right y-label is slightly clipped
         plt.savefig(f'{output_dir}/ Composition_and_Loss_Analysis.png')
         plt.close()
-
-        # #for leapfrog, plot interactions over steps
-        # if losses is None:
-        #     fig5, axes5 = plt.subplots(1, 1, figsize=(8, 5))
-        #     # Plot interactions over steps
-        #     interactions = torch.stack(interactions, dim=0).detach().numpy() # (EPOCHS, 6) -> (EPOCHS, 6)
-        #     axes5.set_xlabel('Time step (dt)')
-        #     axes5.set_ylabel('Interaction Count')
-        #     axes5.set_title('Interactions vs Steps')
-        #     # Plot each interaction type
-        #     axes5.plot(interactions.mean(1)[:,0], label=f'1st neighbor A-A')
-        #     axes5.plot(interactions.mean(1)[:,1], label=f'1st neighbor A-B')
-        #     axes5.plot(interactions.mean(1)[:,2], label=f'1st neighbor B-B')
-        #     axes5.plot(interactions.mean(1)[:,3], label=f'2nd neighbor A-A')
-        #     axes5.plot(interactions.mean(1)[:,4], label=f'2nd neighbor A-B')
-        #     axes5.plot(interactions.mean(1)[:,5], label=f'2nd neighbor B-B')
-        #     axes5.legend()
-        #     plt.savefig(f'{output_dir}/interactions_over_steps.png')
-
-        #     #histogram of  neighbor interactions
-        #     #overall interactions is from final 1/5 of interactions and flatten along B axis of (frame, B, N)
-        #     overall_interactions = interactions[-(num_samples//5):].reshape(-1, 6)
-        #     overall_interactions[:, 0] /= 864
-        #     overall_interactions[:, 1] /= 864
-        #     overall_interactions[:, 2] /= 864
-        #     overall_interactions[:, 3] /= 2592
-        #     overall_interactions[:, 4] /= 2592
-        #     overall_interactions[:, 5] /= 2592
-        #     plt.figure(figsize=(6, 4))
-        #     bin_range = torch.arange(0, 1.01, 0.01)
-        #     plt.hist(overall_interactions[:, 0], bins=bin_range, alpha=0.5, label='1st neighbor A-A')
-        #     plt.hist(overall_interactions[:, 1], bins=bin_range, alpha=0.5, label='1st neighbor A-B')
-        #     plt.hist(overall_interactions[:, 2], bins=bin_range, alpha=0.5, label='1st neighbor B-B')
-
-        #     plt.hist(overall_interactions[:, 3], bins=bin_range, alpha=0.5, label='2nd neighbor A-A')
-        #     plt.hist(overall_interactions[:, 4], bins=bin_range, alpha=0.5, label='2nd neighbor A-B')
-        #     plt.hist(overall_interactions[:, 5], bins=bin_range, alpha=0.5, label='2nd neighbor B-B')
-        #     plt.xlabel('Interaction Count')
-        #     plt.ylabel('Frequency')
-        #     plt.xlim(0, 1)
-        #     plt.ylim(0, 3000//10)
-        #     # plt.title(f'Histogram of Interactions for {nn_model.split("/")[-1].split(".")[0]} (Test Count: {test_count})')
-        #     plt.legend()
-                
-        #     plt.savefig(f'{output_dir}/interactions_histogram.png', dpi=150)
-
-
-        # 6. Save Trajectory
-        # We need Ga percents for the PDB writer
-        # ga_percents = p_a_all
-        # as_percents = 1.0 - p_a_all
-        # #downsample by factor of 10
-        # ga_percents = ga_percents[::50]
-        # as_percents = as_percents[::50]
-        # write_pdb_trajectory(Path(f'{output_dir}/generated_samples.pdb'), coords, ga_percents, as_percents)
 
         # 7. Save model
         if losses is not None:

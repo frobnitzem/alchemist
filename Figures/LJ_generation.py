@@ -52,7 +52,7 @@ def main(runtype = 'RealNVP', KT = 1.0, NA = 216):
         energy0 = compute_energy_LennardJones(x0["r"][:,:,1:], epsilon_LJ=EPSILON_LJ, sigma_LJ=SIGMA_LJ, box_lengths=BOX, cutoff=CUTOFF).sum(1)
 
         loss = 1 / KT * (energy - energy0) - logJ
-        return loss.mean(), x["r"].new_zeros(())
+        return loss.mean()
 
     def feature_extractor(x):
         #calculate average closest neighbor distance
@@ -99,8 +99,7 @@ def main(runtype = 'RealNVP', KT = 1.0, NA = 216):
             losses = torch.tensor(losses).detach().numpy() # (EPOCHS, 2) -> (EPOCHS, 2)
             all_losses = losses[:, 0]
             lJ_losses = -losses[:, 1]
-            boundary_losses = losses[:,2]
-            U_losses = all_losses - lJ_losses - boundary_losses
+            U_losses = all_losses - lJ_losses
 
             axes4 = axes3.twinx()  # instantiate a second Axes that shares the same x-axis
             color = 'tab:blue'
@@ -108,7 +107,6 @@ def main(runtype = 'RealNVP', KT = 1.0, NA = 216):
             axes4.plot(all_losses, color=color, label='Total Loss')
             axes4.plot(lJ_losses, color='tab:orange', label='-logJ')
             axes4.plot(U_losses, color='tab:green', label=r"$\Delta U$/kT")
-            axes4.plot(boundary_losses, color='tab:purple', label='Boundary Loss')
             axes4.tick_params(axis='y', labelcolor=color)
             # axes4.set_ylim(-100,500)
             axes4.legend()
