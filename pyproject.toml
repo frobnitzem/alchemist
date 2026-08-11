@@ -19,6 +19,7 @@ dependencies = [
     "ninja>=1.13.0",
     "matplotlib>=3.9.4",
     "tqdm>=4.68.4",
+    "aifront",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +31,9 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["alchemist*"]
+
+[tool.uv.sources]
+aifront = { path = "../../../INCITE/AIML/AIfront" }
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]

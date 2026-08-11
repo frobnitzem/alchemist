@@ -39,7 +39,8 @@ class LeapFrog(nn.Module):
     def force(self, r, t):
         return -1*auto_diff(self.en, r, t)
 
-    def forward(self, x, inverse=False, info={}):
+    def forward(self, x0, inverse=False, info={}):
+        x = x0.copy()
         shape = x['p'].shape
         if inverse:
             x['r'] = x['r'] - Q(self.dt*x['p'])
@@ -126,21 +127,26 @@ class GlowBlock(nn.Module):
         return nn.Sequential(*layers)
 
     def st1(self, r, tau):
-        #add time as an input to the network
-        tau = torch.full(r.shape[:-1], tau).unsqueeze(-1)
+        # tau is now a tensor of shape (B,)
+        # r is (B, N, D)
+        # We need tau to be (B, N, 1) for concatenation
+        tau = tau.view(-1, 1, 1).expand(-1, r.shape[1], 1)
         r_time = torch.cat([r, tau], dim=-1)
         s = self.step1(r_time).clamp(-4,4)
         t = self.step2(r_time)
         return (s,t)
 
     def st2(self, r, tau):
-        tau = torch.full(r.shape[:-1], tau).unsqueeze(-1)
+        # tau is now a tensor of shape (B,)
+        # r is (B, N, D)
+        tau = tau.view(-1, 1, 1).expand(-1, r.shape[1], 1)
         r_time = torch.cat([r, tau], dim=-1)
         s = self.step3(r_time).clamp(-4,4)
         t = self.step4(r_time)
         return (s,t)
 
-    def forward(self, x, inverse=False, info={}):
+    def forward(self, x0, inverse=False, info={}):
+        x = x0.copy()
         if inverse:
             x['t'] = x['t'] - self.dt
 
@@ -175,7 +181,8 @@ class Brownian(nn.Module):
         self.sigma = sigma
         self.gamma = 0.5*beta*sigma**2
 
-    def forward(self, x, inverse=False, info={}):
+    def forward(self, x0, inverse=False, info={}):
+        x = x0.copy()
         shape = x['r'].shape
 
         if 'dE' not in info:
@@ -214,7 +221,8 @@ class MultiStep(nn.Module):
         self.step = step
         self.n = n
 
-    def forward(self, x, inverse=False, info={}):
+    def forward(self, x0, inverse=False, info={}):
+        x = x0.copy()
         logJ = 0.0
         for i in range(self.n):
             x, lJ, info = self.step(x, inverse=inverse, info=info)
@@ -234,7 +242,8 @@ class MultiIndependent(nn.Module):
         # Make n independent copies of the step module
         self.layers = nn.ModuleList([copy.deepcopy(step) for _ in range(n)])
 
-    def forward(self, x, inverse=False, info={}):
+    def forward(self, x0, inverse=False, info={}):
+        x = x0.copy()
         logJ = 0.0
 
         for layer in self.layers:
@@ -249,7 +258,8 @@ class glow_and_verlet_block(nn.Module):
         self.glow = GlowBlock(dim, data_expansion=data_expansion, data_size=data_size, dt=0, hidden_dims=hidden_dims)
         self.verlet = LeapFrog(self.glow, dt=dt)
 
-    def forward(self, x, inverse=False, info={}):
+    def forward(self, x0, inverse=False, info={}):
+        x = x0.copy()
         #assume x['r'] is structured as dim chemical identities then +3 for coordinates
         #only update the coordinates in verlet, only update the chemical identities in glow
         x_coord  = {
@@ -321,11 +331,12 @@ class RealNVP(nn.Module):
         nn.init.zeros_(linear_layers[-1].weight)
         nn.init.zeros_(linear_layers[-1].bias)
 
-    def forward(self, x, inverse=False, info={}):
+    def forward(self, x0, inverse=False, info={}):
         """
         x: dict with keys 'r', 'p', 't'
         Only r is transformed by RealNVP.
         """
+        x = x0.copy()
         r_chem = x['r']
         r_coord = x['r_coord']
         r = torch.cat([r_chem, r_coord], dim=-1)
