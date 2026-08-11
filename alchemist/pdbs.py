@@ -10,45 +10,30 @@ def _format_pdb_atom(serial, name, x, y, z, occupancy, bfactor):
     )
 def write_pdb_trajectory(
     pdb_path: Path,
-    coords: torch.Tensor,
-    ga_percents: torch.Tensor,
-    as_percents: torch.Tensor,
+    rs: torch.Tensor,
 ) -> None:
     """Writes a multi-model PDB trajectory.
     
     Args:
         pdb_path: Output file path
-        coords: Atom coordinates, shape (n_atoms, 2) or (n_atoms, 3)
-        ga_percents: Values for occupancy column, shape (n_frames, n_atoms)
-        as_percents: Values for B-factor column, shape (n_frames, n_atoms)
+        rs: Atom coordinates, shape (n_frames, n_atoms, DIM+3)
     """
-    coords = coords.detach().cpu()
-
-    if coords.ndim != 2:
-        raise ValueError(f"Expected 2D coords, got {tuple(coords.shape)}")
-
-    if coords.shape[-1] == 2:
-        coords = torch.cat(
-            [coords, torch.zeros(coords.shape[0], 1, dtype=coords.dtype)],
-            dim=-1,
-        )
-    elif coords.shape[-1] != 3:
-        raise ValueError(f"Expected 2D or 3D coords, got {tuple(coords.shape)}")
-
-    ga_percents = ga_percents.detach().cpu()
-    as_percents = as_percents.detach().cpu()
+    n_frames, n_atoms, DIM_plus_3 = rs.shape
+    if DIM_plus_3 < 3:
+        raise ValueError(f"Expected last dimension of rs to be at least 3, got {DIM_plus_3}.")
+    XYZs = rs[:,:,-3:]
+    chemical_identities = rs[:,:,:-3]
+    chemical_percents = torch.softmax(chemical_identities, dim=-1)
 
     with open(pdb_path, "w") as pdb_file:
         pdb_file.write("REMARK multi-model trajectory with fixed coordinates\n")
-        for frame_index, (ga_frame, as_frame) in enumerate(
-            zip(ga_percents, as_percents), start=1
-        ):
+        for frame_index in range(n_frames):
             if (frame_index+1) % 200 == 0:
-                print(f"Writing frame {frame_index+1}/{len(ga_percents)}")
+                print(f"Writing frame {frame_index+1}/{n_frames}")
             pdb_file.write(f"MODEL {frame_index:4d}\n")
-            for atom_index, (coord, ga_value, as_value) in enumerate(
-                zip(coords, ga_frame, as_frame), start=1
-            ):
+            for atom_index in range(n_atoms):
+                coord = XYZs[frame_index, atom_index]
+                p0_value = chemical_percents[frame_index, atom_index, 0]
                 pdb_file.write(
                     _format_pdb_atom(
                         atom_index,
@@ -56,8 +41,8 @@ def write_pdb_trajectory(
                         float(coord[0]),
                         float(coord[1]),
                         float(coord[2]),
-                        float(ga_value),
-                        float(as_value),
+                        float(p0_value),
+                        float(1.0 - p0_value),
                     )
                 )
             pdb_file.write("ENDMDL\n")

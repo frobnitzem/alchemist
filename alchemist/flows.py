@@ -278,7 +278,7 @@ class glow_and_verlet_block(nn.Module):
         return x, lJ, info
 
 class RealNVP(nn.Module):
-    def __init__(self, DIM,NA, hidden_dims=[64,64], n_layers=10, dt = 0.001):
+    def __init__(self, DIM,NA, hidden_dims=[64,64], n_layers=10, dt = 0.001, do_cartesian=False):
         """
         dim: number of coordinate dimensions (e.g., 3N)
         hidden_dims: list of hidden layer sizes for s,t networks
@@ -289,14 +289,21 @@ class RealNVP(nn.Module):
         self.NA = NA
         self.DIM = DIM
         self.dt = dt
+        self.do_cartesian = do_cartesian
 
         # Split dimension in half
         self.split = NA // 2
 
-        self.s_netr = self.make_net((DIM+3)*self.split+1, hidden_dims, (self.split)*DIM)
-        self.t_netr = self.make_net((DIM+3)*self.split+1, hidden_dims, (self.split)*DIM)
-        self.s_netl = self.make_net((DIM+3)*self.split+1, hidden_dims, (self.split)*DIM)
-        self.t_netl = self.make_net((DIM+3)*self.split+1, hidden_dims, (self.split)*DIM)
+        if do_cartesian:
+            self.s_netr = self.make_net((DIM+3)*self.split+1, hidden_dims, (self.split)*(DIM+3))
+            self.t_netr = self.make_net((DIM+3)*self.split+1, hidden_dims, (self.split)*(DIM+3))
+            self.s_netl = self.make_net((DIM+3)*self.split+1, hidden_dims, (self.split)*(DIM+3))
+            self.t_netl = self.make_net((DIM+3)*self.split+1, hidden_dims, (self.split)*(DIM+3))
+        else:
+            self.s_netr = self.make_net((DIM)*self.split+1, hidden_dims, (self.split)*DIM)
+            self.t_netr = self.make_net((DIM)*self.split+1, hidden_dims, (self.split)*DIM)
+            self.s_netl = self.make_net((DIM)*self.split+1, hidden_dims, (self.split)*DIM)
+            self.t_netl = self.make_net((DIM)*self.split+1, hidden_dims, (self.split)*DIM)
 
         # Initialize final layer to zero (same as GlowBlock)
         self.initialize_coupling_net(self.s_netr)
@@ -326,57 +333,106 @@ class RealNVP(nn.Module):
         x: dict with keys 'r', 'p', 't'
         Only r is transformed by RealNVP.
         """
-        r_chem = x['r']
-        r_coord = x['r_coord']
-        r = torch.cat([r_chem, r_coord], dim=-1)
-        #reshape into per batch dimensions for RealNVP
-        logJ = torch.zeros(r_chem.shape[0], device=r_chem.device)
-        
-        for i in range(self.n_layers):
-            if inverse:
-                i = i + 1
-                x['t'] = x['t'] - self.dt
-            # Alternating mask
-            if i % 2 == 0:
-                r1 = r[:, :self.split, :]
-                r2 = r_chem[:, self.split:, :]
-                r_coordpart = r_coord[:, self.split:, :]
-            else:
-                r2 = r_chem[:, :self.split, :]
-                r1 = r[:, self.split:, :]
-                r_coordpart = r_coord[:, :self.split, :]
-            r1 = r1.reshape(r1.shape[0], -1)
-            r2 = r2.reshape(r2.shape[0], -1)
+        if not self.do_cartesian: #only include chemical identities in RealNVP, not coordinates
+            r_chem = x['r']
+            r_coord = x['r_coord']
+            r = torch.cat([r_chem, r_coord], dim=-1)
+            #reshape into per batch dimensions for RealNVP
+            logJ = torch.zeros(r_chem.shape[0], device=r_chem.device)
+            
+            for i in range(self.n_layers):
+                if inverse:
+                    i = i + 1
+                    x['t'] = x['t'] - self.dt
+                # Alternating mask
+                if i % 2 == 0:
+                    r1 = r[:, :self.split, :]
+                    r2 = r_chem[:, self.split:, :]
+                    r_coordpart = r_coord[:, self.split:, :]
+                else:
+                    r2 = r_chem[:, :self.split, :]
+                    r1 = r[:, self.split:, :]
+                    r_coordpart = r_coord[:, :self.split, :]
+                r1 = r1.reshape(r1.shape[0], -1)
+                r2 = r2.reshape(r2.shape[0], -1)
 
-            # Compute s,t
-            t = x['t'].expand(r1.size(0))  # now shape (B,)
-            r1_time = torch.cat([r1, t[:, None].expand(-1, 1)], dim=-1)
-            if i % 2 == 0:
-                s = self.s_netr(r1_time).clamp(-4, 4)
-                t = self.t_netr(r1_time)
-            else:
-                s = self.s_netl(r1_time).clamp(-4, 4)
-                t = self.t_netl(r1_time)
+                # Compute s,t
+                t = x['t'].expand(r1.size(0))  # now shape (B,)
+                r1_time = torch.cat([r1, t[:, None].expand(-1, 1)], dim=-1)
+                if i % 2 == 0:
+                    s = self.s_netr(r1_time).clamp(-4, 4)
+                    t = self.t_netr(r1_time)
+                else:
+                    s = self.s_netl(r1_time).clamp(-4, 4)
+                    t = self.t_netl(r1_time)
 
-            if inverse:
-                r2 = (r2 - t) * torch.exp(-s)
-                logJ += (-s).sum(dim=-1)
-            else:
-                r2 = r2 * torch.exp(s) + t
-                logJ += s.sum(dim=-1)
-                x['t'] = x['t'] + self.dt
+                if inverse:
+                    r2 = (r2 - t) * torch.exp(-s)
+                    logJ += (-s).sum(dim=-1)
+                else:
+                    r2 = r2 * torch.exp(s) + t
+                    logJ += s.sum(dim=-1)
+                    x['t'] = x['t'] + self.dt
 
-            r1 = r1.reshape(r1.shape[0], -1, self.DIM + 3)
-            r2 = r2.reshape(r2.shape[0], -1, self.DIM)
-            r2 = torch.cat([r2, r_coordpart], dim=-1)  # Reattach coordinates
+                r1 = r1.reshape(r1.shape[0], -1, self.DIM + 3)
+                r2 = r2.reshape(r2.shape[0], -1, self.DIM)
+                r2 = torch.cat([r2, r_coordpart], dim=-1)  # Reattach coordinates
 
-            # Reassemble
-            if i % 2 == 0:
-                r = torch.cat([r1, r2], dim=-2)
-            else:
-                r = torch.cat([r2, r1], dim=-2)
-                
-            r_chem = r[:,:,:-3]
+                # Reassemble
+                if i % 2 == 0:
+                    r = torch.cat([r1, r2], dim=-2)
+                else:
+                    r = torch.cat([r2, r1], dim=-2)
+                    
+                r_chem = r[:,:,:-3]
 
-        x['r'] = r_chem  # Only keep chemical identities
-        return x, logJ, info
+            x['r'] = r_chem  # Only keep chemical identities
+            return x, logJ, info
+        else:
+            # If do_cartesian is True, apply RealNVP to the entire r tensor
+            r = x['r']
+            logJ = torch.zeros(r.shape[0], device=r.device)
+            
+            for i in range(self.n_layers):
+                if inverse:
+                    i = i + 1
+                    x['t'] = x['t'] - self.dt
+                # Alternating mask
+                if i % 2 == 0:
+                    r1 = r[:, :self.split, :]
+                    r2 = r[:, self.split:, :]
+                else:
+                    r2 = r[:, :self.split, :]
+                    r1 = r[:, self.split:, :]
+                r1 = r1.reshape(r1.shape[0], -1)
+                r2 = r2.reshape(r2.shape[0], -1)
+
+                # Compute s,t
+                t = x['t'].expand(r1.size(0))  # now shape (B,)
+                r1_time = torch.cat([r1, t[:, None].expand(-1, 1)], dim=-1)
+                if i % 2 == 0:
+                    s = self.s_netr(r1_time).clamp(-4, 4)
+                    t = self.t_netr(r1_time)
+                else:
+                    s = self.s_netl(r1_time).clamp(-4, 4)
+                    t = self.t_netl(r1_time)
+
+                if inverse:
+                    r2 = (r2 - t) * torch.exp(-s)
+                    logJ += (-s).sum(dim=-1)
+                else:
+                    r2 = r2 * torch.exp(s) + t
+                    logJ += s.sum(dim=-1)
+                    x['t'] = x['t'] + self.dt
+
+                r1 = r1.reshape(r1.shape[0], -1, self.DIM + 3)
+                r2 = r2.reshape(r2.shape[0], -1, self.DIM + 3)
+
+                # Reassemble
+                if i % 2 == 0:
+                    r = torch.cat([r1, r2], dim=-2)
+                else:
+                    r = torch.cat([r2, r1], dim=-2)
+
+            x['r'] = r
+            return x, logJ, info

@@ -46,7 +46,7 @@ if __name__ == "__main__":
     SIGMA = 5
     scale = test_count // 2
     folder = 'Figures'
-    run_type = 'RealNVP'
+    run_type = 'Glow'
     NA = 216
     average_interactions = []
     KTs = [0.25, 0.5, 1, 2, 4]
@@ -54,7 +54,7 @@ if __name__ == "__main__":
         nn_model = glob.glob(f'{folder}/{run_type}_NA{NA}_KT{KT}*/trained_flow_model.pth')[0]
         print(f"Testing model: {nn_model}")
         filename = folder + '/' + nn_model.split('/')[1] + '/'
-        networkdims = [8,8,8]
+        networkdims = [32,16,16,16]#[8,8,8]
         # NA = int(nn_model.split('/')[1].split('_')[1])
         PDB_PATH = Path(f'examples/GaAs/GaAs{NA}.pdb')
         num_repeats = round((NA / 8)**(1/3),0)

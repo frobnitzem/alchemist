@@ -116,3 +116,149 @@ def compute_energy_parameterized(
         return term_bound + term_mu + term_e1.sum(dim=-1) + term_e2.sum(dim=-1)
     else:
         return term_mu + term_e1.sum(dim=-1) + term_e2.sum(dim=-1)
+
+from typing import Optional, Union
+TensorLike = Union[float, torch.Tensor]
+
+def compute_energy_LennardJones(
+    particle_locations: torch.Tensor,
+    epsilon_LJ: TensorLike = 1.0,
+    sigma_LJ: TensorLike = 1.0,
+    box_lengths: Optional[TensorLike] = None,
+    cutoff: Optional[TensorLike] = None,
+    p: float = 12.0,
+    q: float = 6.0,
+    spatial_dim: int = 3,
+) -> torch.Tensor:
+    """
+    Computes generalized Lennard-Jones energy per particle.
+
+    Args:
+        particle_locations:
+            (B, N, D), (N, D), (B, N*D), or (N*D,)
+        epsilon_LJ:
+            Energy scale; scalar or shape (B,)
+        sigma_LJ:
+            Length scale; scalar or shape (B,)
+        box_lengths:
+            Rectangular periodic box; scalar, (D,), or (B, D)
+        cutoff:
+            Optional hard cutoff; scalar or shape (B,)
+        p, q:
+            LJ exponents. Standard LJ uses p=12, q=6.
+
+    Returns:
+        Energy per particle with shape (B, N).
+        Summing over N gives the physical total potential energy.
+    """
+    if not p > q > 0:
+        raise ValueError("Require p > q > 0.")
+
+    x = particle_locations
+    if not x.is_floating_point():
+        x = x.float()
+
+    # Convert all supported inputs to (B, N, D).
+    if x.ndim == 1:
+        x = x.reshape(1, -1, spatial_dim)
+    elif x.ndim == 2:
+        x = (
+            x.unsqueeze(0)
+            if x.shape[-1] == spatial_dim
+            else x.reshape(x.shape[0], -1, spatial_dim)
+        )
+
+    if x.ndim != 3 or x.shape[-1] != spatial_dim:
+        raise ValueError(
+            "Expected (N,D), (B,N,D), (N*D,), or (B,N*D)."
+        )
+
+    B, N, D = x.shape
+
+    def batch_parameter(value: TensorLike) -> torch.Tensor:
+        value = torch.as_tensor(value, dtype=x.dtype, device=x.device)
+
+        if value.numel() not in (1, B):
+            raise ValueError(
+                "Parameters must be scalar or contain one value per batch."
+            )
+
+        if value.numel() == B and B > 1:
+            return value.reshape(B, 1, 1)
+
+        return value.squeeze()
+
+    epsilon = batch_parameter(epsilon_LJ)
+    sigma = batch_parameter(sigma_LJ)
+
+    if torch.any(epsilon <= 0) or torch.any(sigma <= 0):
+        raise ValueError("epsilon_LJ and sigma_LJ must be positive.")
+
+    # dr[b, i, j] = r_i - r_j
+    dr = x[:, :, None, :] - x[:, None, :, :]
+
+    # Minimum-image convention for a rectangular periodic box.
+    if box_lengths is not None:
+        box = torch.as_tensor(
+            box_lengths,
+            dtype=x.dtype,
+            device=x.device,
+        )
+
+        if box.ndim == 0:
+            box = box.repeat(D)
+
+        if box.shape not in ((D,), (B, D)) or torch.any(box <= 0):
+            raise ValueError(
+                "box_lengths must be positive with shape (D,) or (B,D)."
+            )
+
+        box = box.reshape(-1, 1, 1, D)
+        dr = dr - box * torch.round(dr / box)
+
+    r2 = dr.square().sum(dim=-1)
+
+    # Remove self-interactions.
+    mask = ~torch.eye(
+        N,
+        dtype=torch.bool,
+        device=x.device,
+    ).unsqueeze(0)
+
+    if cutoff is not None:
+        cutoff = batch_parameter(cutoff)
+
+        if torch.any(cutoff <= 0):
+            raise ValueError("cutoff must be positive.")
+
+        mask = mask & (r2 < cutoff.square())
+
+    # Give excluded pairs a safe nonzero distance.
+    r2 = torch.where(mask, r2, torch.ones_like(r2))
+
+    sigma_over_r_sq = sigma.square() / r2
+
+    c_pq = p / (
+        (p - q)
+        * (q / p) ** (q / (p - q))
+    )
+
+    # Factorized form avoids inf - inf when particles overlap.
+    pair_energy = (
+        c_pq
+        * epsilon
+        * sigma_over_r_sq.pow(q / 2)
+        * (
+            sigma_over_r_sq.pow((p - q) / 2)
+            - 1.0
+        )
+    )
+
+    pair_energy = torch.where(
+        mask,
+        pair_energy,
+        torch.zeros_like(pair_energy),
+    )
+
+    # Split each pair energy equally between its two particles.
+    return 0.5 * pair_energy.sum(dim=-1)
