@@ -75,7 +75,7 @@ def mk_lattice(
     a: float = 1.0,
     c_over_a: float = IDEAL_C_OVER_A,
     basis_names: str | Sequence[str] = "Mg",
-    center: bool = False,
+    center: bool = True,
 ) -> tuple[list[str], np.ndarray, np.ndarray]:
     """Construct a repeated HCP lattice in a rectangular periodic box.
 
@@ -179,9 +179,9 @@ def write_pdb(names, crds) -> str:
 with open("HCP.pdb", "w") as f:
 
     names, coordinates, box = mk_lattice(
-        nx=8,#10
-        ny=4,#6
-        nz=4,#6
+        nx=4,#10
+        ny=2,#6
+        nz=2,#6
         a=1.09016685,
         c_over_a=np.sqrt(8.0 / 3.0),
         basis_names="LJ",

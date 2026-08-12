@@ -34,7 +34,8 @@ def train_and_summarize(
     losses = []
     all_features = []
     for epoch in range(epochs):
-        print(f"Epoch {epoch+1}/{epochs}")
+        if (epoch+1) % 10 == 0:
+            print(f"Epoch {epoch+1}/{epochs}")
         # ignored, Final epoch is for evaluation (no parameter updates)
         model.train()
         

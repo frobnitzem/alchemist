@@ -28,13 +28,14 @@ def fix_kT(p, kT):
     return p*torch.sqrt(Ndof * kT / p2)[...,None,None]
 
 class LeapFrog(nn.Module):
-    def __init__(self, en, dt=0.001, const_kT: Optional[float] = None):
+    def __init__(self, en, dt=0.001, const_kT: Optional[float] = None, box: Optional[torch.Tensor] = None):
         super().__init__()
         self.en = en
         self.dt = dt
         if const_kT is not None:
             assert const_kT > 0.0, "const_kT value must be a temp."
         self.const_kT = const_kT
+        self.box = box
 
     def force(self, r, t):
         return -1*auto_diff(self.en, r, t)
@@ -43,6 +44,9 @@ class LeapFrog(nn.Module):
         shape = x['p'].shape
         if inverse:
             x['r'] = x['r'] - Q(self.dt*x['p'])
+            if self.box is not None:
+                xyz = torch.remainder(x['r'][..., -3:] + self.box / 2, self.box) - self.box / 2
+                x['r'] = torch.cat((x['r'][..., :-3], xyz), dim=-1)
             x['t'] = x['t'] - self.dt
             frc = self.force(x['r'], x['t'])
 
@@ -79,15 +83,20 @@ class LeapFrog(nn.Module):
             else:
                 x['p'] = momentum
                 lJ = torch.zeros(shape[:-2])
+            
             x['r'] = x['r'] + Q(self.dt*x['p'])
+            if self.box is not None:
+                xyz = torch.remainder(x['r'][..., -3:] + self.box / 2, self.box) - self.box / 2
+                x['r'] = torch.cat((x['r'][..., :-3], xyz), dim=-1)
             x['t'] = x['t'] + self.dt
 
         return x, lJ, {}
 
 class GlowBlock(nn.Module):
-    def __init__(self, dim, data_expansion = lambda r: r, data_size=1, dt=0.001, hidden_dims = [16]):
+    def __init__(self, dim, data_expansion = lambda r: r, data_size=1, dt=0.001, hidden_dims = [16], box=None):
         super().__init__()
         self.dt = dt
+        self.box = box
         self.data_expansion = data_expansion
 
         self.step1 = self.make_net(data_size * dim+1, hidden_dims, dim)
@@ -152,10 +161,18 @@ class GlowBlock(nn.Module):
             s, t = self.st1(self.data_expansion(x['p']), x['t'])
             x['r'] = (x['r'] - t)*torch.exp(-s)
 
+            if self.box is not None:
+                xyz = torch.remainder(x['r'][..., -3:] + self.box / 2, self.box) - self.box / 2
+                x['r'] = torch.cat((x['r'][..., :-3], xyz), dim=-1)
+
             lJ += -s.sum(dim=(1,2))
         else:
             s, t = self.st1(self.data_expansion(x['p']), x['t'])
             x['r'] = x['r']*torch.exp(s) + t
+
+            if self.box is not None:
+                xyz = torch.remainder(x['r'][..., -3:] + self.box / 2, self.box) - self.box / 2
+                x['r'] = torch.cat((x['r'][..., :-3], xyz), dim=-1)
 
             lJ = s.sum(dim=(1,2))
 
@@ -278,7 +295,7 @@ class glow_and_verlet_block(nn.Module):
         return x, lJ, info
 
 class RealNVP(nn.Module):
-    def __init__(self, DIM,NA, hidden_dims=[64,64], n_layers=10, dt = 0.001, do_cartesian=False):
+    def __init__(self, DIM,NA, hidden_dims=[64,64], n_layers=10, dt = 0.001, do_cartesian=False, box=None):
         """
         dim: number of coordinate dimensions (e.g., 3N)
         hidden_dims: list of hidden layer sizes for s,t networks
@@ -290,7 +307,7 @@ class RealNVP(nn.Module):
         self.DIM = DIM
         self.dt = dt
         self.do_cartesian = do_cartesian
-
+        self.box = box
         # Split dimension in half
         self.split = NA // 2
 
@@ -433,6 +450,10 @@ class RealNVP(nn.Module):
                     r = torch.cat([r1, r2], dim=-2)
                 else:
                     r = torch.cat([r2, r1], dim=-2)
+                
+                if self.box is not None:
+                    xyz = torch.remainder(r[..., -3:] + self.box / 2, self.box) - self.box / 2
+                    r = torch.cat((r[..., :-3], xyz), dim=-1)
 
             x['r'] = r
             return x, logJ, info

@@ -124,7 +124,7 @@ def compute_energy_LennardJones(
     particle_locations: torch.Tensor,
     epsilon_LJ: TensorLike = 1.0,
     sigma_LJ: TensorLike = 1.0,
-    box_lengths: Optional[TensorLike] = None,
+    box: Optional[TensorLike] = None,
     cutoff: Optional[TensorLike] = None,
     p: float = 12.0,
     q: float = 6.0,
@@ -140,7 +140,7 @@ def compute_energy_LennardJones(
             Energy scale; scalar or shape (B,)
         sigma_LJ:
             Length scale; scalar or shape (B,)
-        box_lengths:
+        box:
             Rectangular periodic box; scalar, (D,), or (B, D)
         cutoff:
             Optional hard cutoff; scalar or shape (B,)
@@ -195,35 +195,22 @@ def compute_energy_LennardJones(
         raise ValueError("epsilon_LJ and sigma_LJ must be positive.")
 
     # dr[b, i, j] = r_i - r_j
-    dr = x[:, :, None, :] - x[:, None, :, :]
-
-    # Minimum-image convention for a rectangular periodic box.
-    if box_lengths is not None:
-        box = torch.as_tensor(
-            box_lengths,
-            dtype=x.dtype,
-            device=x.device,
-        )
-
+    delta = x[:, :, None, :] - x[:, None, :, :]
+    if box is not None:
+        box = torch.as_tensor(box, dtype=x.dtype, device=x.device)
         if box.ndim == 0:
             box = box.repeat(D)
+        if box.ndim == 1:
+            box = box.reshape(1, 1, 1, D)
+        elif box.ndim == 2:
+            box = box.reshape(B, 1, 1, D)
 
-        if box.shape not in ((D,), (B, D)) or torch.any(box <= 0):
-            raise ValueError(
-                "box_lengths must be positive with shape (D,) or (B,D)."
-            )
-
-        box = box.reshape(-1, 1, 1, D)
-        dr = dr - box * torch.round(dr / box)
-
-    r2 = dr.square().sum(dim=-1)
+        delta = torch.remainder(delta + box / 2, box) - box / 2
+    
+    r2 = delta.square().sum(dim=-1)
 
     # Remove self-interactions.
-    mask = ~torch.eye(
-        N,
-        dtype=torch.bool,
-        device=x.device,
-    ).unsqueeze(0)
+    mask = ~torch.eye(N,dtype=torch.bool,device=x.device).unsqueeze(0)
 
     if cutoff is not None:
         cutoff = batch_parameter(cutoff)
