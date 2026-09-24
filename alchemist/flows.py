@@ -127,8 +127,10 @@ class GlowBlock(nn.Module):
         return nn.Sequential(*layers)
 
     def st1(self, r, tau):
-        # tau is now a tensor of shape (B,)
+        # tau is now a tensor of shape (B,) or a float
         # r is (B, N, D)
+        if not isinstance(tau, torch.Tensor):
+            tau = torch.tensor([tau], device=r.device, dtype=r.dtype)
         # We need tau to be (B, N, 1) for concatenation
         tau = tau.view(-1, 1, 1).expand(-1, r.shape[1], 1)
         r_time = torch.cat([r, tau], dim=-1)
@@ -137,8 +139,10 @@ class GlowBlock(nn.Module):
         return (s,t)
 
     def st2(self, r, tau):
-        # tau is now a tensor of shape (B,)
+        # tau is now a tensor of shape (B,) or a float
         # r is (B, N, D)
+        if not isinstance(tau, torch.Tensor):
+            tau = torch.tensor([tau], device=r.device, dtype=r.dtype)
         tau = tau.view(-1, 1, 1).expand(-1, r.shape[1], 1)
         r_time = torch.cat([r, tau], dim=-1)
         s = self.step3(r_time).clamp(-4,4)

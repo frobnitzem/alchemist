@@ -3,41 +3,34 @@ from typing import Callable, Any, Tuple, Generator
 
 def train_and_summarize(
     model: torch.nn.Module,
-    loss_fn: Callable[[Any], torch.Tensor],
+    loss_fn: Callable[[Any, Any, torch.Tensor], torch.Tensor],
     data_generator: Callable[[], Generator[Any, None, None]],
     optimizer: torch.optim.Optimizer,
     epochs: int,
     batches_per_epoch: int,
     feature_extractor: Callable[[torch.nn.Module, Any], torch.Tensor],
     inverse: bool = False
-) -> Tuple[torch.nn.Module, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.nn.Module, torch.Tensor, torch.Tensor]:
     """
     Standardized training loop that optimizes a model and summarizes the 
     statistical properties of a feature extractor over the final epoch.
 
     Args:
         model: The NN module to train.
-        loss_fn: Function taking a batch of data and returning a scalar loss.
+        loss_fn: Function taking (x0, x, lJ) and returning a scalar loss.
         data_generator: Function returning a generator of data batches.
         optimizer: Optimizer for the model parameters.
         epochs: Number of training epochs.
         batches_per_epoch: Number of batches per epoch.
         feature_extractor: Function taking (model, batch) and returning 
                            the features to summarize (B, M, D).
-        reverse: Whether to train in reverse direction.
+        inverse: Whether to train in reverse direction.
 
     Returns:
-        Trained model, mean of features (M, D), variance of features (M, D), and loss values.
+        Trained model, mean of features (M, D), variance of features (M, D).
     """
-    means = []
-    vars = []
-    losses = []
-    all_features = []
-    for epoch in range(epochs):
-        print(f"Epoch {epoch+1}/{epochs}")
-        # ignored, Final epoch is for evaluation (no parameter updates)
+    for epoch in range(epochs - 1):
         model.train()
-        
         gen = data_generator()
         for _ in range(batches_per_epoch):
             try:
@@ -46,28 +39,33 @@ def train_and_summarize(
                 break
 
             optimizer.zero_grad()
-            x = copy.deepcopy(x0)  # Ensure original batch is not modified
+            x = copy.deepcopy(x0)
 
             x, lJ, info = model(x, inverse=inverse)
-
-            feat = feature_extractor(x)
-            all_features.append(feat)
-
             loss = loss_fn(x0, x, lJ)
 
             if torch.isnan(loss) or torch.isinf(loss):
                 raise RuntimeError(f"Loss is NaN/Inf at epoch {epoch}")
             
-            losses.append([loss.detach().cpu().mean().item(),lJ.detach().cpu().mean().item()])
-            # if losses[-1] > 1e6:
-            #     print(x0)
-            #     raise RuntimeError(f"Loss is too large at epoch {epoch}: {losses[-1]}")
-
             loss.backward()
             optimizer.step()
 
-        #if True:
-            # Stack all batches: (Total_B, M, D)
-            #stacked_features = torch.cat(all_features, dim=0)
-            
-    return all_features, losses
+    # Final epoch for evaluation
+    model.eval()
+    eval_features = []
+    gen = data_generator()
+    for _ in range(batches_per_epoch):
+        try:
+            x0 = next(gen)
+        except StopIteration:
+            break
+        with torch.no_grad():
+            x, _, _ = model(x0, inverse=inverse)
+            feat = feature_extractor(model, x)
+            eval_features.append(feat)
+    
+    stacked_features = torch.cat(eval_features, dim=0) # (Total_B, M, D)
+    mean = stacked_features.mean(dim=0)
+    var = stacked_features.var(dim=0)
+    
+    return model, mean, var

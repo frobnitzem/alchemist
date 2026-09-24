@@ -6,6 +6,7 @@ from pathlib import Path
 from alchemist.flows import GlowBlock, MultiStep, Q, fix_kT
 from alchemist.pdbs import read_pdb_coords
 from alchemist.neighbors import compute_neighbor_masks, get_neighbor_indices, assemble_neighbor_features, sum_neighbor_features
+from alchemist.aifront_utils import NeighborExpansion
 from alchemist.ml_utils import train_and_summarize
 
 _GAAS_PDB = Path(__file__).resolve().parents[1] / 'examples' / 'GaAs' / 'GaAs.pdb'
@@ -80,7 +81,8 @@ def train_glowblock_two_part(
     lr=1e-3,
 ):
     U, neighborlists = build_U(batch_size, Na, dim, periodic=periodic)
-    glow = GlowBlock(neighborlists=neighborlists, dim=dim, dt=0.001)
+    expansion = NeighborExpansion(pdb_path=_GAAS_PDB, box=_GAAS_BOX, cuts=[2.5, 4.5])
+    glow = GlowBlock(dim=dim, data_expansion=expansion, data_size=17, dt=0.001)
     flow = MultiStep(glow, n_steps_flow)
     
     normal = torch.distributions.normal.Normal(0, 1)
@@ -95,24 +97,11 @@ def train_glowblock_two_part(
             x['p'] = torch.stack([percent, 1 - percent], dim=2)
             yield x
 
-    def loss_fn(batch):
-        x0 = batch.copy()
-        x = batch.copy()
-        logJ = 0.0
-        # The original loop did 2 steps for training
-        for _ in range(2):
-            x, lJ, info = flow(x)
-            logJ = logJ + lJ
-        
+    def loss_fn(x0, x, logJ):
         loss = 1 / kT * (U(x['r'], x['t']) - U(x0['r'], 0.0)) - logJ
         return loss.mean()
 
-    def feature_extractor(model, batch):
-        # model here is the flow (MultiStep)
-        x = batch.copy()
-        for _ in range(n_steps_flow):
-            x, _, _ = model(x)
-        
+    def feature_extractor(model, x):
         # Extract features for sum_neighbor_features
         # The target is the composition (B, N, 1)
         dr = percentA(x['r']).unsqueeze(-1)
