@@ -37,7 +37,8 @@ class LeapFrog(nn.Module):
         self.const_kT = const_kT
 
     def force(self, r, t):
-        return -1*auto_diff(self.en, r, t)
+        with torch.enable_grad():   # the force needs autograd even when sampling under no_grad
+            return -1*auto_diff(self.en, r, t)
 
     def forward(self, x0, inverse=False, info={}):
         x = x0.copy()
@@ -64,7 +65,7 @@ class LeapFrog(nn.Module):
                 lJ = Ndof*torch.log(a)
             else:
                 x['p'] = x['p'] - Q(self.dt*frc)
-                lJ = torch.zeros(shape[:-2])
+                lJ = torch.zeros(shape[:-2], device=x['p'].device, dtype=x['p'].dtype)
         else:
             frc = self.force(x['r'], x['t'])
             momentum = x['p'] + Q(self.dt*frc)
@@ -79,7 +80,7 @@ class LeapFrog(nn.Module):
                 lJ = Ndof*torch.log(fac)
             else:
                 x['p'] = momentum
-                lJ = torch.zeros(shape[:-2])
+                lJ = torch.zeros(shape[:-2], device=x['p'].device, dtype=x['p'].dtype)
             x['r'] = x['r'] + Q(self.dt*x['p'])
             x['t'] = x['t'] + self.dt
 

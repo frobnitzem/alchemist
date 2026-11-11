@@ -291,3 +291,21 @@ class StateDist:
         kl = (P * (P.clamp_min(1e-30).log() - q.clamp_min(1e-12).log())).sum()
         return {'q': q, 'P': P.clone(), 'KL_pi_q': kl.reshape(1),
                 'TV': (0.5 * (q - P).abs().sum()).reshape(1)}
+
+
+class LossValue:
+    """Mean of a loss over the batches, to compare untrained / non-learned flows with the
+    analytic optimum.  kind="kl": KLLoss on forward samples; kind="mle": MLELoss on
+    inverse-mapped target samples.  Remaining kwargs go to the loss constructor."""
+    def __init__(self, kind, **loss_kwargs):
+        from alchemist.losses import KLLoss, MLELoss
+        self.loss = {'kl': KLLoss, 'mle': MLELoss}[kind](**loss_kwargs)
+
+    def __call__(self, x_tuple, batch):
+        return {'loss': self.loss(x_tuple, batch).reshape(1).cpu(), 'n': torch.ones(1)}
+
+    def reduce(self, r1, r2):
+        return {'loss': r1['loss'] + r2['loss'], 'n': r1['n'] + r2['n']}
+
+    def finalize(self, res, total_batches):
+        return {'loss': res['loss'] / res['n']}

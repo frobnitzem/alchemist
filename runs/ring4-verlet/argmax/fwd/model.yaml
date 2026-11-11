@@ -1,0 +1,17 @@
+_target_: alchemist.flows:Directed
+inverse: false
+flow:
+  _target_: alchemist.flows:MultiStep
+  n: 10
+  step:
+    _target_: alchemist.flows:LeapFrog
+    dt: 0.1
+    en:
+      _target_: alchemist.aifront_utils:NeighborEnergy
+      pdb_path: runs/ring4/ring4.pdb
+      box: [10.0, 10.0, 10.0]
+      cuts: [1.1]
+      MU: [0.0, 0.0]
+      E1: [[0.6931471805599453, 0.0], [0.0, 0.6931471805599453]]
+      sigma_r: 1.0
+      identity: argmax

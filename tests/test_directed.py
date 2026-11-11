@@ -12,3 +12,18 @@ def test_multiindependent_inverse_roundtrip():
     z, lji, _ = m(y, inverse=True)
     assert torch.allclose(z['r'], x['r'], atol=1e-4) and torch.allclose(z['p'], x['p'], atol=1e-4)
     assert torch.allclose(lj + lji, torch.zeros_like(lj), atol=1e-4)
+
+
+def test_verlet_neighbor_energy_roundtrip_no_grad():
+    from alchemist.flows import LeapFrog, MultiStep
+    from alchemist.aifront_utils import NeighborEnergy
+    en = NeighborEnergy('runs/ring4/ring4.pdb', [10., 10., 10.], [1.1], [0., 0.],
+                        [[0.7, 0.], [0., 0.7]], identity='softmax')
+    m = Directed(MultiStep(LeapFrog(en, dt=0.1), 5))
+    x = {'r': torch.randn(6, 4, 2), 'p': torch.randn(6, 4, 2), 't': torch.zeros(6)}
+    with torch.no_grad():                     # `ai infer` runs under no_grad
+        y, lj, _ = m(x)
+        z, lji, _ = m(y, inverse=True)
+    assert torch.allclose(z['r'], x['r'], atol=1e-3) and torch.allclose(z['p'], x['p'], atol=1e-3)
+    assert lj.abs().max() == 0 and lji.abs().max() == 0
+    assert (y['r'] - x['r']).abs().max() > 1e-3   # the flow actually moved something

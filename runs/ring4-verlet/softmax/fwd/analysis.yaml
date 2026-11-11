@@ -1,0 +1,18 @@
+loss:
+  _target_: alchemist.analysis:LossValue
+  kind: kl
+  pdb_path: runs/ring4/ring4.pdb
+  box: [10.0, 10.0, 10.0]
+  cuts: [1.1]
+  MU: [0.0, 0.0]
+  E1: [[0.6931471805599453, 0.0], [0.0, 0.6931471805599453]]   # aligned bond costs ln4 (both ends)
+  KT: 1.0
+  identity: argmax
+states:
+  _target_: alchemist.analysis:StateDist
+  pdb_path: runs/ring4/ring4.pdb
+  box: [10.0, 10.0, 10.0]
+  cuts: [1.1]
+  MU: [0.0, 0.0]
+  E1: [[0.6931471805599453, 0.0], [0.0, 0.6931471805599453]]   # aligned bond costs ln4 (both ends)
+  KT: 1.0
