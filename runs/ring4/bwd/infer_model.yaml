@@ -1,0 +1,16 @@
+_target_: alchemist.flows:Directed
+inverse: false
+flow:
+  _target_: alchemist.flows:MultiIndependent
+  n: 2
+  step:
+    _target_: alchemist.flows:GlowBlock
+    dim: 2
+    dt: 0.001
+    hidden_dims: [16, 16]
+    data_size: 3
+    data_expansion:
+      _target_: alchemist.aifront_utils:NeighborExpansion
+      pdb_path: runs/ring4/ring4.pdb
+      box: [10.0, 10.0, 10.0]
+      cuts: [1.1]

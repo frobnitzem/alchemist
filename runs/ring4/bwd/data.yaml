@@ -1,0 +1,10 @@
+_target_: alchemist.aifront_data:IsingTargetDataset
+batch_size: 100
+n_batches: 100
+t0: 0.002
+pdb_path: runs/ring4/ring4.pdb
+box: [10.0, 10.0, 10.0]
+cuts: [1.1]
+MU: [0.0, 0.0]
+E1: [[0.6931471805599453, 0.0], [0.0, 0.6931471805599453]]   # aligned bond costs eps=ln4 (seen from both ends), exp(-eps)=0.25
+KT: 1.0

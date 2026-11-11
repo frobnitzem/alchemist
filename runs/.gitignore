@@ -1,0 +1,5 @@
+params.ckpt
+output.safetensors
+*.log
+figures/
+__pycache__/

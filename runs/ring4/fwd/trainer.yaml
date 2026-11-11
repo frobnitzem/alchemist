@@ -1,0 +1,17 @@
+Lightning:
+  optimizer_name: "torch.optim:Adam"
+  optimizer_kwargs: {lr: 0.003}
+  loss_fn:
+    _target_: alchemist.losses:KLLoss
+    pdb_path: runs/ring4/ring4.pdb
+    box: [10.0, 10.0, 10.0]
+    cuts: [1.1]
+    MU: [0.0, 0.0]
+    E1: [[0.6931471805599453, 0.0], [0.0, 0.6931471805599453]]   # aligned bond costs eps=ln4 (seen from both ends), exp(-eps)=0.25
+    KT: 1.0
+    sigma_r: 1.0
+    M: 1.0
+    identity: argmax
+Trainer:
+  max_epochs: 100
+  use_distributed_sampler: False

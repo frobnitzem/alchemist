@@ -1,0 +1,5 @@
+_target_: alchemist.aifront_data:AlchemistDataset
+batch_size: 100
+na: 4
+dim: 2
+sigma: 1.0
