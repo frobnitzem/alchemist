@@ -287,7 +287,7 @@ class StateDist:
 
     def finalize(self, res, total_batches):
         q = res['counts'] / res['counts'].sum()
-        P = self.P
+        P = self.P.to(q.device)
         kl = (P * (P.clamp_min(1e-30).log() - q.clamp_min(1e-12).log())).sum()
         return {'q': q, 'P': P.clone(), 'KL_pi_q': kl.reshape(1),
                 'TV': (0.5 * (q - P).abs().sum()).reshape(1)}
