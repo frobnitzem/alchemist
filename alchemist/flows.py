@@ -250,7 +250,7 @@ class MultiIndependent(nn.Module):
         x = x0.copy()
         logJ = 0.0
 
-        for layer in self.layers:
+        for layer in (reversed(self.layers) if inverse else self.layers):
             x, lJ, info = layer(x, inverse=inverse, info=info)
             logJ += lJ
 
@@ -395,3 +395,19 @@ class RealNVP(nn.Module):
 
         x['r'] = r_chem  # Only keep chemical identities
         return x, logJ, info
+
+
+class Directed(nn.Module):
+    """Wrap a flow so that calling it applies it forward or inverse.
+
+    Keeps the checkpoint layout identical for both directions: train with
+    inverse=True (maximum likelihood on target samples), then sample with
+    inverse=False using the same weights.
+    """
+    def __init__(self, flow, inverse=False):
+        super().__init__()
+        self.flow = flow
+        self.inverse = inverse
+
+    def forward(self, x0, inverse=False, info={}):
+        return self.flow(x0, inverse=self.inverse != inverse, info=info)
