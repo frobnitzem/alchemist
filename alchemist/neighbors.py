@@ -60,29 +60,11 @@ def assemble_neighbor_features(features: torch.Tensor, neighborlists: List[torch
     Returns:
         (B, N, 1 + sum(M_i), D) tensor.
     """
-    B, N, D = features.shape
-    
-    # 1. Self features: (B, N, 1, D)
-    # We want to pick the i-th atom for the i-th slot.
-    # features: (B, N, D) -> unsqueeze(2) -> (B, N, 1, D)
-    # The self-feature for atom i is just features[:, i, :].
-    # We can simply use the features tensor as the self-shell.
-    self_feat = features.unsqueeze(2) # (B, N, 1, D)
-    
-    all_shells = [self_feat]
-    
-    # 2. Neighbor shells
-    for nbr in neighborlists:
-        # nbr: (N, M)
-        # Expand nbr to (B, N, M, D)
-        idx = nbr.unsqueeze(0).unsqueeze(-1).expand(B, -1, -1, D)
-        # Expand features to (B, N, M, D) for gathering along dim=1 (the atom axis)
-        feat_exp = features.unsqueeze(2).expand(-1, -1, nbr.shape[1], -1)
-        shell_feat = torch.gather(feat_exp, dim=1, index=idx)
-        all_shells.append(shell_feat)
-        
-    # Concatenate along the neighbor dimension: (B, N, 1 + M1 + M2..., D)
-    return torch.cat(all_shells, dim=2)
+    # Self slot, then one advanced-indexing gather per shell:
+    # features[:, nbr] is (B, N, M, D) with no expanded intermediate.
+    shells = [features.unsqueeze(2)]
+    shells.extend(features[:, nbr] for nbr in neighborlists)
+    return torch.cat(shells, dim=2)
 
 def sum_neighbor_features(assembled_features: torch.Tensor) -> torch.Tensor:
     """
