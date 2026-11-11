@@ -46,14 +46,15 @@ if __name__ == "__main__":
     SIGMA = 5
     scale = test_count // 2
     folder = 'Figures'
+    subfolder = 'interactions_forward'
     run_type = 'Glow'
     NA = 216
     average_interactions = []
     KTs = [0.25, 0.5, 1, 2, 4]
     for KT in KTs:
-        nn_model = glob.glob(f'{folder}/{run_type}_NA{NA}_KT{KT}*/trained_flow_model.pth')[0]
+        nn_model = glob.glob(f'{folder}/{subfolder}/{run_type}_NA{NA}_KT{KT}*/trained_flow_model.pth')[0]
         print(f"Testing model: {nn_model}")
-        filename = folder + '/' + nn_model.split('/')[1] + '/'
+        filename = folder + '/' + subfolder + '/' + nn_model.split('/')[-2] + '/'
         networkdims = [32,16,16,16]#[8,8,8]
         # NA = int(nn_model.split('/')[1].split('_')[1])
         PDB_PATH = Path(f'examples/GaAs/GaAs{NA}.pdb')
@@ -86,11 +87,11 @@ if __name__ == "__main__":
         if run_type == 'RealNVP':
             r_buf = torch.empty((1, NA, DIM))
             r_coord_buf = torch.empty((1, NA, DIM))
-            t_buf = torch.zeros((1,), dtype=torch.float32)
+            t_buf = torch.tensor(0.0)#torch.zeros((1,), dtype=torch.float32)
         elif run_type == 'Glow':
             r_buf = torch.empty((1, NA, DIM))
             p_buf = torch.empty((1, NA, DIM))
-            t_buf = torch.zeros((1,), dtype=torch.float32)
+            t_buf = torch.tensor(0.0)#torch.zeros((1,), dtype=torch.float32)
 
         with torch.no_grad():
             for i in range(test_count):
